@@ -7,11 +7,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/baihua19941101/cdnManage/internal/config"
+	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
 	"github.com/baihua19941101/cdnManage/internal/handler/health"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 )
 
-func NewRouter() *gin.Engine {
+func NewRouter(authHandler *authhandler.Handler) *gin.Engine {
 	router := gin.New()
 
 	router.Use(
@@ -21,13 +22,16 @@ func NewRouter() *gin.Engine {
 	)
 
 	health.RegisterRoutes(router)
+	if authHandler != nil {
+		authhandler.RegisterRoutes(router, authHandler)
+	}
 
 	return router
 }
 
-func NewServer(cfg *config.AppConfig) *http.Server {
+func NewServer(cfg *config.AppConfig, authHandler *authhandler.Handler) *http.Server {
 	return &http.Server{
 		Addr:    ":" + strconv.Itoa(cfg.Server.Port),
-		Handler: NewRouter(),
+		Handler: NewRouter(authHandler),
 	}
 }

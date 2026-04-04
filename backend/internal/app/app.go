@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 
+	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
 	"github.com/baihua19941101/cdnManage/internal/infra/configloader"
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	"github.com/baihua19941101/cdnManage/internal/service/bootstrap"
 	"github.com/baihua19941101/cdnManage/internal/transport"
 )
@@ -40,8 +42,15 @@ func New() (*Application, error) {
 		return nil, err
 	}
 
+	authService := serviceauth.NewService(
+		store.Users(),
+		txManager,
+		serviceauth.NewTokenManager(cfg.JWT),
+	)
+	authHandler := authhandler.NewHandler(authService)
+
 	return &Application{
-		server: transport.NewServer(cfg),
+		server: transport.NewServer(cfg, authHandler),
 	}, nil
 }
 
