@@ -1,5 +1,10 @@
 .env
-bin/
-dist/
-coverage/
-node_modules/
+.env.local
+backend/.env
+backend/.env.local
+backend/bin/
+backend/dist/
+backend/coverage/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
