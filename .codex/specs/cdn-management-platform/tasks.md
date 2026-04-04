@@ -1,17 +1,17 @@
 # Implementation Plan
 
-- [ ] 1. 搭建后端基础工程与配置加载骨架
+- [x] 1. 搭建后端基础工程与配置加载骨架
   - 初始化 Go + Gin + GORM + Redis 的目录结构，至少包含 `cmd/`、`internal/handler/`、`internal/middleware/`、`internal/service/`、`internal/repository/`、`internal/provider/`、`internal/model/`、`internal/infra/`
   - 编写配置加载模块，支持数据库、Redis、JWT 或会话密钥、应用级加密密钥、初始化超级管理员参数
   - 实现 Gin 应用启动入口、基础路由注册、健康检查接口与统一错误响应结构
   - _Requirements: 5.1, 8.1, 9.1, 9.3_
 
 - [ ] 2. 实现核心数据模型与数据库迁移
-  - [ ] 2.1 编写用户、项目、用户项目角色、项目存储桶、项目 CDN、审计日志的数据模型与 GORM 迁移代码
+  - [x] 2.1 编写用户、项目、用户项目角色、项目存储桶、项目 CDN、审计日志的数据模型与 GORM 迁移代码
     - 创建 `users`、`projects`、`user_project_roles`、`project_buckets`、`project_cdns`、`audit_logs` 模型
     - 添加唯一约束、索引、枚举值约束与创建时间字段
     - _Requirements: 3.1, 3.2, 4.1, 4.2, 6.1, 9.2_
-  - [ ] 2.2 实现仓储层基础查询接口与事务封装
+  - [x] 2.2 实现仓储层基础查询接口与事务封装
     - 为用户、项目、项目绑定、审计日志编写 repository 接口与 GORM 实现
     - 实现服务层可复用的事务执行器
     - _Requirements: 3.1, 3.2, 4.2, 6.1, 9.2_
