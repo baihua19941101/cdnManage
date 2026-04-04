@@ -52,10 +52,7 @@ func (s *Service) Run(ctx context.Context) error {
 		return fmt.Errorf("hash bootstrap password: %w", err)
 	}
 
-	username := strings.TrimSpace(s.config.Username)
-	if username == "" {
-		username = buildBootstrapUsername(s.config.Email)
-	}
+	username := buildBootstrapUsername(s.config.Email)
 
 	return s.tx.WithinTransaction(ctx, func(repos repository.Repositories) error {
 		superAdmin := &model.User{
