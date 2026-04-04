@@ -40,7 +40,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 			"projects",
 			"users",
 		} {
-			require.NoError(t, db.Exec("DELETE FROM " + table).Error)
+			require.NoError(t, db.Exec("DELETE FROM "+table).Error)
 		}
 	})
 

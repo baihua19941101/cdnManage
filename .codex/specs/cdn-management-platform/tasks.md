@@ -6,7 +6,7 @@
   - 实现 Gin 应用启动入口、基础路由注册、健康检查接口与统一错误响应结构
   - _Requirements: 5.1, 8.1, 9.1, 9.3_
 
-- [ ] 2. 实现核心数据模型与数据库迁移
+- [x] 2. 实现核心数据模型与数据库迁移
   - [x] 2.1 编写用户、项目、用户项目角色、项目存储桶、项目 CDN、审计日志的数据模型与 GORM 迁移代码
     - 创建 `users`、`projects`、`user_project_roles`、`project_buckets`、`project_cdns`、`audit_logs` 模型
     - 添加唯一约束、索引、枚举值约束与创建时间字段
