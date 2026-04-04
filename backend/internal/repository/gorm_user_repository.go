@@ -24,6 +24,23 @@ func (r *gormUserRepository) Delete(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&model.User{}, id).Error
 }
 
+func (r *gormUserRepository) Count(ctx context.Context, filter UserFilter) (int64, error) {
+	query := r.db.WithContext(ctx).Model(&model.User{})
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.PlatformRole != "" {
+		query = query.Where("platform_role = ?", filter.PlatformRole)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 func (r *gormUserRepository) GetByID(ctx context.Context, id uint64) (*model.User, error) {
 	var user model.User
 	if err := r.db.WithContext(ctx).First(&user, id).Error; err != nil {
