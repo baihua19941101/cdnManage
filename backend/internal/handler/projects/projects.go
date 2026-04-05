@@ -1,26 +1,26 @@
 package projects
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/provider"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	serviceprojects "github.com/baihua19941101/cdnManage/internal/service/projects"
 )
 
 type Handler struct {
-	service *serviceprojects.Service
-	audits  repository.AuditLogRepository
+	service  *serviceprojects.Service
+	audits   repository.AuditLogRepository
+	recorder *auditservice.Recorder
 }
 
 type projectScopeMiddleware interface {
@@ -109,7 +109,11 @@ type cdnTaskResultResponse struct {
 }
 
 func NewHandler(service *serviceprojects.Service, audits repository.AuditLogRepository) *Handler {
-	return &Handler{service: service, audits: audits}
+	return &Handler{
+		service:  service,
+		audits:   audits,
+		recorder: auditservice.NewRecorder(audits),
+	}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
@@ -319,7 +323,7 @@ func (h *Handler) RefreshURLs(ctx *gin.Context) {
 		URLs:        req.URLs,
 	})
 	if err != nil {
-		h.recordAudit(ctx, projectID, "cdn.refresh_url", endpointOrPrimary(req.CDNEndpoint), model.AuditResultFailure, gin.H{
+		h.recordAudit(ctx, projectID, "cdn.refresh_url", endpointOrPrimary(req.CDNEndpoint), "failure", gin.H{
 			"urls":  req.URLs,
 			"error": err.Error(),
 		})
@@ -327,7 +331,7 @@ func (h *Handler) RefreshURLs(ctx *gin.Context) {
 		return
 	}
 
-	h.recordAudit(ctx, projectID, "cdn.refresh_url", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
+	h.recordAudit(ctx, projectID, "cdn.refresh_url", endpointOrPrimary(req.CDNEndpoint), "success", gin.H{
 		"urls":              req.URLs,
 		"providerRequestId": result.ProviderRequestID,
 		"taskId":            result.TaskID,
@@ -354,7 +358,7 @@ func (h *Handler) RefreshDirectories(ctx *gin.Context) {
 		Directories: req.Directories,
 	})
 	if err != nil {
-		h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), model.AuditResultFailure, gin.H{
+		h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), "failure", gin.H{
 			"directories": req.Directories,
 			"error":       err.Error(),
 		})
@@ -362,7 +366,7 @@ func (h *Handler) RefreshDirectories(ctx *gin.Context) {
 		return
 	}
 
-	h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
+	h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), "success", gin.H{
 		"directories":       req.Directories,
 		"providerRequestId": result.ProviderRequestID,
 		"taskId":            result.TaskID,
@@ -390,7 +394,7 @@ func (h *Handler) SyncResources(ctx *gin.Context) {
 		Paths:       req.Paths,
 	})
 	if err != nil {
-		h.recordAudit(ctx, projectID, "cdn.sync_resources", endpointOrPrimary(req.CDNEndpoint), model.AuditResultFailure, gin.H{
+		h.recordAudit(ctx, projectID, "cdn.sync_resources", endpointOrPrimary(req.CDNEndpoint), "failure", gin.H{
 			"bucketName": req.BucketName,
 			"paths":      req.Paths,
 			"error":      err.Error(),
@@ -399,7 +403,7 @@ func (h *Handler) SyncResources(ctx *gin.Context) {
 		return
 	}
 
-	h.recordAudit(ctx, projectID, "cdn.sync_resources", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
+	h.recordAudit(ctx, projectID, "cdn.sync_resources", endpointOrPrimary(req.CDNEndpoint), "success", gin.H{
 		"bucketName":        req.BucketName,
 		"paths":             req.Paths,
 		"providerRequestId": result.ProviderRequestID,
@@ -517,7 +521,7 @@ func endpointOrPrimary(endpoint string) string {
 }
 
 func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, targetIdentifier, result string, details gin.H) {
-	if h.audits == nil {
+	if h.recorder == nil {
 		return
 	}
 
@@ -527,14 +531,7 @@ func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, target
 	}
 
 	projectIDValue := projectID
-	var metadata datatypes.JSON
-	if len(details) > 0 {
-		if payload, err := json.Marshal(details); err == nil {
-			metadata = datatypes.JSON(payload)
-		}
-	}
-
-	_ = h.audits.Create(ctx.Request.Context(), &model.AuditLog{
+	_ = h.recorder.Record(ctx.Request.Context(), auditservice.RecordInput{
 		ActorUserID:      actorUserID,
 		ProjectID:        &projectIDValue,
 		Action:           action,
@@ -542,6 +539,6 @@ func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, target
 		TargetIdentifier: targetIdentifier,
 		Result:           result,
 		RequestID:        httpresp.GetRequestID(ctx),
-		Metadata:         metadata,
+		Metadata:         map[string]interface{}(details),
 	})
 }

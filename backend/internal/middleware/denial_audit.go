@@ -1,15 +1,13 @@
 package middleware
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/model"
-	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 )
 
 const (
@@ -18,13 +16,13 @@ const (
 )
 
 type AccessDeniedAuditor struct {
-	audits repository.AuditLogRepository
+	recorder *auditservice.Recorder
 }
 
 var defaultAccessDeniedAuditor *AccessDeniedAuditor
 
-func NewAccessDeniedAuditor(audits repository.AuditLogRepository) *AccessDeniedAuditor {
-	return &AccessDeniedAuditor{audits: audits}
+func NewAccessDeniedAuditor(recorder *auditservice.Recorder) *AccessDeniedAuditor {
+	return &AccessDeniedAuditor{recorder: recorder}
 }
 
 func SetDefaultAccessDeniedAuditor(auditor *AccessDeniedAuditor) {
@@ -49,7 +47,7 @@ func (a *AccessDeniedAuditor) RecordProjectScopeDenied(ctx *gin.Context, project
 }
 
 func (a *AccessDeniedAuditor) record(ctx *gin.Context, action, targetType, targetIdentifier string, projectID *uint64, details gin.H) {
-	if a == nil || a.audits == nil {
+	if a == nil || a.recorder == nil {
 		return
 	}
 
@@ -58,12 +56,7 @@ func (a *AccessDeniedAuditor) record(ctx *gin.Context, action, targetType, targe
 		return
 	}
 
-	metadata, err := json.Marshal(details)
-	if err != nil {
-		return
-	}
-
-	_ = a.audits.Create(ctx.Request.Context(), &model.AuditLog{
+	_ = a.recorder.Record(ctx.Request.Context(), auditservice.RecordInput{
 		ActorUserID:      userID,
 		ProjectID:        projectID,
 		Action:           action,
@@ -71,7 +64,7 @@ func (a *AccessDeniedAuditor) record(ctx *gin.Context, action, targetType, targe
 		TargetIdentifier: targetIdentifier,
 		Result:           model.AuditResultDenied,
 		RequestID:        httpresp.GetRequestID(ctx),
-		Metadata:         datatypes.JSON(metadata),
+		Metadata:         map[string]interface{}(details),
 	})
 }
 
