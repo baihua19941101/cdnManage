@@ -3,10 +3,15 @@ package app
 import (
 	"context"
 	"net/http"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
+	infraCache "github.com/baihua19941101/cdnManage/internal/infra/cache"
 	"github.com/baihua19941101/cdnManage/internal/infra/configloader"
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
+	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	"github.com/baihua19941101/cdnManage/internal/service/bootstrap"
@@ -30,6 +35,11 @@ func New() (*Application, error) {
 		return nil, err
 	}
 
+	redisClient, err := infraCache.OpenRedis(cfg.Redis)
+	if err != nil {
+		return nil, err
+	}
+
 	store := repository.NewGormStore(db)
 	txManager := repository.NewGormTxManager(db)
 	bootstrapService := bootstrap.NewService(
@@ -48,9 +58,14 @@ func New() (*Application, error) {
 		serviceauth.NewTokenManager(cfg.JWT),
 	)
 	authHandler := authhandler.NewHandler(authService)
+	projectScopeResolver := middleware.NewProjectScopeResolver(
+		store.UserProjectRoles(),
+		middleware.NewRedisUserProjectRoleCache(newRedisAdapter(redisClient)),
+		5*time.Minute,
+	)
 
 	return &Application{
-		server: transport.NewServer(cfg, authHandler),
+		server: transport.NewServer(cfg, authHandler, projectScopeResolver),
 	}, nil
 }
 
@@ -69,4 +84,26 @@ func Run() error {
 	}
 
 	return nil
+}
+
+type redisAdapter struct {
+	client *redis.Client
+}
+
+func newRedisAdapter(client *redis.Client) *redisAdapter {
+	return &redisAdapter{client: client}
+}
+
+func (a *redisAdapter) Get(ctx context.Context, key string) (string, error) {
+	if value, err := a.client.Get(ctx, key).Result(); err == redis.Nil {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	} else {
+		return value, nil
+	}
+}
+
+func (a *redisAdapter) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+	return a.client.Set(ctx, key, value, expiration).Err()
 }
