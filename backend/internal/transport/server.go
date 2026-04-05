@@ -20,7 +20,7 @@ type projectScopeMiddleware interface {
 	Middleware() gin.HandlerFunc
 }
 
-func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, authenticator *serviceauth.Service, _ projectScopeMiddleware) *gin.Engine {
+func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *gin.Engine {
 	router := gin.New()
 
 	router.Use(
@@ -40,7 +40,7 @@ func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handle
 		projecthandler.RegisterRoutes(router, projectHandler, authenticator)
 	}
 	if storageHandler != nil && authenticator != nil {
-		storagehandler.RegisterRoutes(router, storageHandler, authenticator)
+		storagehandler.RegisterRoutes(router, storageHandler, authenticator, projectScope)
 	}
 
 	return router

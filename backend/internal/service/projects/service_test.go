@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -232,4 +233,95 @@ func TestMapProviderDetectionErrorInvalidCredentials(t *testing.T) {
 	require.ErrorAs(t, err, &appErr)
 	require.Equal(t, 400, appErr.StatusCode)
 	require.Equal(t, "invalid_bucket_credential", appErr.Code)
+}
+
+func TestServiceListBucketObjectsUsesProviderBoundary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &fakeObjectStorageProvider{
+		providerType: provider.TypeAliyun,
+		objects: []provider.ObjectInfo{
+			{
+				Key:          "assets/app.js",
+				ETag:         "etag-1",
+				ContentType:  "application/javascript",
+				Size:         1024,
+				LastModified: time.Now().UTC(),
+			},
+		},
+	}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-list-" + suffix,
+		Description: "storage list test",
+		Buckets: []ProjectBucketInput{
+			{
+				BucketName: "bucket-list-" + suffix,
+				Region:     "cn-hangzhou",
+				Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+				IsPrimary:  true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: "aliyun",
+				CDNEndpoint:  "https://cdn-list-" + suffix + ".example.com",
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	objects, err := service.ListBucketObjects(ctx, project.ID, ListBucketObjectsInput{
+		Prefix:  "assets/",
+		MaxKeys: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, objects, 1)
+	require.Equal(t, "assets/app.js", objects[0].Key)
+	require.Equal(t, int64(1024), objects[0].Size)
+	require.Equal(t, "bucket-list-"+suffix, providerStub.lastRequest.Bucket)
+	require.Equal(t, "assets/", providerStub.lastRequest.Prefix)
+	require.Equal(t, 100, providerStub.lastRequest.MaxKeys)
+}
+
+type fakeObjectStorageProvider struct {
+	providerType provider.Type
+	objects      []provider.ObjectInfo
+	lastRequest  provider.ListObjectsRequest
+}
+
+func (f *fakeObjectStorageProvider) Type() provider.Type {
+	return f.providerType
+}
+
+func (f *fakeObjectStorageProvider) Detect(_ context.Context, _ provider.CredentialPayload, _ string) (provider.Type, error) {
+	return f.providerType, nil
+}
+
+func (f *fakeObjectStorageProvider) ListObjects(_ context.Context, req provider.ListObjectsRequest) ([]provider.ObjectInfo, error) {
+	f.lastRequest = req
+	return f.objects, nil
+}
+
+func (f *fakeObjectStorageProvider) UploadObject(_ context.Context, _ provider.UploadObjectRequest) error {
+	return nil
+}
+
+func (f *fakeObjectStorageProvider) DownloadObject(_ context.Context, _ provider.DownloadObjectRequest) (io.ReadCloser, provider.ObjectMeta, error) {
+	return nil, provider.ObjectMeta{}, nil
+}
+
+func (f *fakeObjectStorageProvider) DeleteObject(_ context.Context, _ provider.DeleteObjectRequest) error {
+	return nil
+}
+
+func (f *fakeObjectStorageProvider) RenameObject(_ context.Context, _ provider.RenameObjectRequest) error {
+	return nil
 }
