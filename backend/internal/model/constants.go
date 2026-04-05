@@ -13,3 +13,41 @@ const (
 	AuditResultFailure     = "failure"
 	AuditResultDenied      = "denied"
 )
+
+func IsPlatformAdminRole(role string) bool {
+	return role == PlatformRoleSuperAdmin || role == PlatformRoleAdmin
+}
+
+func IsKnownPlatformRole(role string) bool {
+	switch role {
+	case PlatformRoleSuperAdmin, PlatformRoleAdmin, PlatformRoleStandard:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsKnownProjectRole(role string) bool {
+	switch role {
+	case ProjectRoleAdmin, ProjectRoleReadOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+func CanReadProject(platformRole, projectRole string) bool {
+	if IsPlatformAdminRole(platformRole) {
+		return true
+	}
+
+	return projectRole == ProjectRoleAdmin || projectRole == ProjectRoleReadOnly
+}
+
+func CanWriteProject(platformRole, projectRole string) bool {
+	if IsPlatformAdminRole(platformRole) {
+		return true
+	}
+
+	return projectRole == ProjectRoleAdmin
+}
