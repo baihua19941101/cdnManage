@@ -87,6 +87,16 @@ type RenameBucketObjectInput struct {
 	TargetKey  string
 }
 
+type RefreshURLsInput struct {
+	CDNEndpoint string
+	URLs        []string
+}
+
+type RefreshDirectoriesInput struct {
+	CDNEndpoint string
+	Directories []string
+}
+
 type projectCDNRepository interface {
 	ListByProjectID(ctx context.Context, projectID uint64) ([]model.ProjectCDN, error)
 	Delete(ctx context.Context, id uint64) error
@@ -109,6 +119,10 @@ func NewService(projects repository.ProjectRepository, tx repository.TxManager, 
 
 func (s *Service) RegisterObjectStorageProvider(p provider.ObjectStorageProvider) error {
 	return s.providers.RegisterObjectStorage(p)
+}
+
+func (s *Service) RegisterCDNProvider(p provider.CDNProvider) error {
+	return s.providers.RegisterCDN(p)
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
@@ -345,6 +359,52 @@ func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, inpu
 		return mapObjectStorageOperationError(err, "rename")
 	}
 	return nil
+}
+
+func (s *Service) RefreshURLs(ctx context.Context, projectID uint64, input RefreshURLsInput) (provider.TaskResult, error) {
+	cdnBinding, cdnProvider, credentialPayload, err := s.resolveCDNProviderAndCredential(ctx, projectID, strings.TrimSpace(input.CDNEndpoint))
+	if err != nil {
+		return provider.TaskResult{}, err
+	}
+
+	urls := trimNonEmptyValues(input.URLs)
+	if len(urls) == 0 {
+		return provider.TaskResult{}, httpresp.NewAppError(400, "validation_error", "at least one url is required", nil)
+	}
+
+	result, err := cdnProvider.RefreshURLs(ctx, provider.RefreshURLsRequest{
+		Endpoint:   cdnBinding.CDNEndpoint,
+		URLs:       urls,
+		Credential: credentialPayload,
+	})
+	if err != nil {
+		return provider.TaskResult{}, mapCDNOperationError(err, "refresh_urls")
+	}
+
+	return result, nil
+}
+
+func (s *Service) RefreshDirectories(ctx context.Context, projectID uint64, input RefreshDirectoriesInput) (provider.TaskResult, error) {
+	cdnBinding, cdnProvider, credentialPayload, err := s.resolveCDNProviderAndCredential(ctx, projectID, strings.TrimSpace(input.CDNEndpoint))
+	if err != nil {
+		return provider.TaskResult{}, err
+	}
+
+	directories := trimNonEmptyValues(input.Directories)
+	if len(directories) == 0 {
+		return provider.TaskResult{}, httpresp.NewAppError(400, "validation_error", "at least one directory is required", nil)
+	}
+
+	result, err := cdnProvider.RefreshDirectories(ctx, provider.RefreshDirectoriesRequest{
+		Endpoint:    cdnBinding.CDNEndpoint,
+		Directories: directories,
+		Credential:  credentialPayload,
+	})
+	if err != nil {
+		return provider.TaskResult{}, mapCDNOperationError(err, "refresh_directories")
+	}
+
+	return result, nil
 }
 
 func (s *Service) replaceBindings(ctx context.Context, repos repository.Repositories, projectID uint64, buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
@@ -626,6 +686,33 @@ func mapObjectStorageOperationError(err error, operation string) error {
 	}
 }
 
+func mapCDNOperationError(err error, operation string) error {
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		return httpresp.NewAppError(502, "cdn_operation_failed", "cdn provider operation failed", map[string]string{
+			"operation": operation,
+		})
+	}
+
+	switch providerErr.Code {
+	case provider.ErrCodeInvalidCredentials:
+		return httpresp.NewAppError(400, "invalid_bucket_credential", "bucket credential is invalid", nil)
+	case provider.ErrCodeInvalidRequest:
+		return httpresp.NewAppError(400, "invalid_cdn_request", "cdn refresh request is invalid", map[string]string{
+			"operation": operation,
+		})
+	case provider.ErrCodeTimeout:
+		return httpresp.NewAppError(504, "cdn_request_timeout", "cdn provider request timed out", map[string]string{
+			"operation": operation,
+		})
+	default:
+		return httpresp.NewAppError(502, "cdn_operation_failed", "cdn provider operation failed", map[string]string{
+			"providerErrorCode": string(providerErr.Code),
+			"operation":         operation,
+		})
+	}
+}
+
 func bucketCredentialPlaintext(bucket ProjectBucketInput) string {
 	if bucket.Credential != "" {
 		return bucket.Credential
@@ -674,6 +761,31 @@ func selectProjectBucket(project *model.Project, bucketName string) (*model.Proj
 	return &project.Buckets[0], nil
 }
 
+func selectProjectCDN(project *model.Project, cdnEndpoint string) (*model.ProjectCDN, error) {
+	if len(project.CDNs) == 0 {
+		return nil, httpresp.NewAppError(404, "cdn_binding_not_found", "project has no cdn binding", nil)
+	}
+
+	if cdnEndpoint != "" {
+		for i := range project.CDNs {
+			if project.CDNs[i].CDNEndpoint == cdnEndpoint {
+				return &project.CDNs[i], nil
+			}
+		}
+		return nil, httpresp.NewAppError(404, "cdn_binding_not_found", "requested cdn binding was not found", map[string]string{
+			"cdnEndpoint": cdnEndpoint,
+		})
+	}
+
+	for i := range project.CDNs {
+		if project.CDNs[i].IsPrimary {
+			return &project.CDNs[i], nil
+		}
+	}
+
+	return &project.CDNs[0], nil
+}
+
 func (s *Service) resolveBucketProviderAndCredential(ctx context.Context, projectID uint64, bucketName string) (*model.ProjectBucket, provider.ObjectStorageProvider, provider.CredentialPayload, error) {
 	project, err := s.projects.GetByID(ctx, projectID)
 	if err != nil {
@@ -696,6 +808,46 @@ func (s *Service) resolveBucketProviderAndCredential(ctx context.Context, projec
 	}
 
 	return bucket, storageProvider, credentialPayload, nil
+}
+
+func (s *Service) resolveCDNProviderAndCredential(ctx context.Context, projectID uint64, cdnEndpoint string) (*model.ProjectCDN, provider.CDNProvider, provider.CredentialPayload, error) {
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+
+	cdnBinding, err := selectProjectCDN(project, cdnEndpoint)
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, err
+	}
+
+	cdnProvider, err := s.providers.CDN(provider.Type(cdnBinding.ProviderType))
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, mapCDNOperationError(err, "resolve_provider")
+	}
+
+	bucket, err := selectProjectBucket(project, "")
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, err
+	}
+
+	credentialPayload, err := s.bucketCredentialPayload(*bucket)
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, err
+	}
+
+	return cdnBinding, cdnProvider, credentialPayload, nil
+}
+
+func trimNonEmptyValues(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			normalized = append(normalized, trimmed)
+		}
+	}
+	return normalized
 }
 
 func (s *Service) maskBucketCredentials(project *model.Project) {

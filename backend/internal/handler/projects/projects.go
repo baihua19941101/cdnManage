@@ -1,14 +1,18 @@
 package projects
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/datatypes"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/model"
+	"github.com/baihua19941101/cdnManage/internal/provider"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	serviceprojects "github.com/baihua19941101/cdnManage/internal/service/projects"
@@ -16,6 +20,7 @@ import (
 
 type Handler struct {
 	service *serviceprojects.Service
+	audits  repository.AuditLogRepository
 }
 
 type projectScopeMiddleware interface {
@@ -78,8 +83,27 @@ type projectCDNResponse struct {
 	IsPrimary    bool   `json:"isPrimary"`
 }
 
-func NewHandler(service *serviceprojects.Service) *Handler {
-	return &Handler{service: service}
+type refreshURLsRequest struct {
+	CDNEndpoint string   `json:"cdnEndpoint"`
+	URLs        []string `json:"urls" binding:"required"`
+}
+
+type refreshDirectoriesRequest struct {
+	CDNEndpoint string   `json:"cdnEndpoint"`
+	Directories []string `json:"directories" binding:"required"`
+}
+
+type cdnTaskResultResponse struct {
+	ProviderRequestID string            `json:"providerRequestId,omitempty"`
+	TaskID            string            `json:"taskId,omitempty"`
+	Status            string            `json:"status,omitempty"`
+	SubmittedAt       string            `json:"submittedAt,omitempty"`
+	CompletedAt       string            `json:"completedAt,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+}
+
+func NewHandler(service *serviceprojects.Service, audits repository.AuditLogRepository) *Handler {
+	return &Handler{service: service, audits: audits}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
@@ -100,6 +124,8 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	}
 	projectGroup.GET("/cdns", middleware.RequireProjectRead(), handler.GetCDNs)
 	projectGroup.PUT("/cdns", middleware.RequireProjectWrite(), handler.UpdateCDNs)
+	projectGroup.POST("/cdns/refresh-url", middleware.RequireProjectWrite(), handler.RefreshURLs)
+	projectGroup.POST("/cdns/refresh-directory", middleware.RequireProjectWrite(), handler.RefreshDirectories)
 }
 
 func (h *Handler) List(ctx *gin.Context) {
@@ -268,6 +294,76 @@ func (h *Handler) UpdateCDNs(ctx *gin.Context) {
 	httpresp.Success(ctx, gin.H{"cdns": response})
 }
 
+func (h *Handler) RefreshURLs(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	var req refreshURLsRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid refresh urls request", gin.H{"error": err.Error()}))
+		return
+	}
+
+	result, err := h.service.RefreshURLs(ctx.Request.Context(), projectID, serviceprojects.RefreshURLsInput{
+		CDNEndpoint: req.CDNEndpoint,
+		URLs:        req.URLs,
+	})
+	if err != nil {
+		h.recordAudit(ctx, projectID, "cdn.refresh_url", endpointOrPrimary(req.CDNEndpoint), model.AuditResultFailure, gin.H{
+			"urls":  req.URLs,
+			"error": err.Error(),
+		})
+		ctx.Error(err)
+		return
+	}
+
+	h.recordAudit(ctx, projectID, "cdn.refresh_url", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
+		"urls":              req.URLs,
+		"providerRequestId": result.ProviderRequestID,
+		"taskId":            result.TaskID,
+		"status":            result.Status,
+	})
+	httpresp.Success(ctx, toCDNTaskResultResponse(result))
+}
+
+func (h *Handler) RefreshDirectories(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	var req refreshDirectoriesRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid refresh directories request", gin.H{"error": err.Error()}))
+		return
+	}
+
+	result, err := h.service.RefreshDirectories(ctx.Request.Context(), projectID, serviceprojects.RefreshDirectoriesInput{
+		CDNEndpoint: req.CDNEndpoint,
+		Directories: req.Directories,
+	})
+	if err != nil {
+		h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), model.AuditResultFailure, gin.H{
+			"directories": req.Directories,
+			"error":       err.Error(),
+		})
+		ctx.Error(err)
+		return
+	}
+
+	h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
+		"directories":       req.Directories,
+		"providerRequestId": result.ProviderRequestID,
+		"taskId":            result.TaskID,
+		"status":            result.Status,
+	})
+	httpresp.Success(ctx, toCDNTaskResultResponse(result))
+}
+
 func projectIDFromParam(ctx *gin.Context) (uint64, error) {
 	raw := ctx.Param("id")
 	projectID, err := strconv.ParseUint(raw, 10, 64)
@@ -350,4 +446,57 @@ func toProjectCDNInputs(requests []projectCDNRequest) []serviceprojects.ProjectC
 		})
 	}
 	return result
+}
+
+func toCDNTaskResultResponse(result provider.TaskResult) cdnTaskResultResponse {
+	response := cdnTaskResultResponse{
+		ProviderRequestID: result.ProviderRequestID,
+		TaskID:            result.TaskID,
+		Status:            result.Status,
+		Metadata:          result.Metadata,
+	}
+	if !result.SubmittedAt.IsZero() {
+		response.SubmittedAt = result.SubmittedAt.Format(time.RFC3339)
+	}
+	if result.CompletedAt != nil {
+		response.CompletedAt = result.CompletedAt.Format(time.RFC3339)
+	}
+	return response
+}
+
+func endpointOrPrimary(endpoint string) string {
+	if endpoint == "" {
+		return "primary"
+	}
+	return endpoint
+}
+
+func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, targetIdentifier, result string, details gin.H) {
+	if h.audits == nil {
+		return
+	}
+
+	actorUserID, ok := middleware.CurrentUserID(ctx)
+	if !ok || actorUserID == 0 {
+		return
+	}
+
+	projectIDValue := projectID
+	var metadata datatypes.JSON
+	if len(details) > 0 {
+		if payload, err := json.Marshal(details); err == nil {
+			metadata = datatypes.JSON(payload)
+		}
+	}
+
+	_ = h.audits.Create(ctx.Request.Context(), &model.AuditLog{
+		ActorUserID:      actorUserID,
+		ProjectID:        &projectIDValue,
+		Action:           action,
+		TargetType:       "cdn",
+		TargetIdentifier: targetIdentifier,
+		Result:           result,
+		RequestID:        httpresp.GetRequestID(ctx),
+		Metadata:         metadata,
+	})
 }

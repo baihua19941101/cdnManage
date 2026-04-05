@@ -75,7 +75,7 @@ func New() (*Application, error) {
 		txManager,
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
-	projectHandler := projecthandler.NewHandler(projectService)
+	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
