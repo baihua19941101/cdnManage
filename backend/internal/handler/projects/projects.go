@@ -19,20 +19,57 @@ type Handler struct {
 }
 
 type createProjectRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Description string `json:"description"`
+	Name        string                 `json:"name" binding:"required"`
+	Description string                 `json:"description"`
+	Buckets     []projectBucketRequest `json:"buckets" binding:"required"`
+	CDNs        []projectCDNRequest    `json:"cdns" binding:"required"`
 }
 
 type updateProjectRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Description string `json:"description"`
+	Name        string                 `json:"name" binding:"required"`
+	Description string                 `json:"description"`
+	Buckets     []projectBucketRequest `json:"buckets" binding:"required"`
+	CDNs        []projectCDNRequest    `json:"cdns" binding:"required"`
 }
 
 type projectResponse struct {
-	ID          uint64 `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"createdAt"`
+	ID          uint64                  `json:"id"`
+	Name        string                  `json:"name"`
+	Description string                  `json:"description"`
+	CreatedAt   string                  `json:"createdAt"`
+	Buckets     []projectBucketResponse `json:"buckets,omitempty"`
+	CDNs        []projectCDNResponse    `json:"cdns,omitempty"`
+}
+
+type projectBucketRequest struct {
+	ProviderType         string `json:"providerType" binding:"required"`
+	BucketName           string `json:"bucketName" binding:"required"`
+	Region               string `json:"region"`
+	CredentialCiphertext string `json:"credentialCiphertext" binding:"required"`
+	IsPrimary            bool   `json:"isPrimary"`
+}
+
+type projectCDNRequest struct {
+	ProviderType string `json:"providerType" binding:"required"`
+	CDNEndpoint  string `json:"cdnEndpoint" binding:"required"`
+	PurgeScope   string `json:"purgeScope"`
+	IsPrimary    bool   `json:"isPrimary"`
+}
+
+type projectBucketResponse struct {
+	ID           uint64 `json:"id"`
+	ProviderType string `json:"providerType"`
+	BucketName   string `json:"bucketName"`
+	Region       string `json:"region"`
+	IsPrimary    bool   `json:"isPrimary"`
+}
+
+type projectCDNResponse struct {
+	ID           uint64 `json:"id"`
+	ProviderType string `json:"providerType"`
+	CDNEndpoint  string `json:"cdnEndpoint"`
+	PurgeScope   string `json:"purgeScope"`
+	IsPrimary    bool   `json:"isPrimary"`
 }
 
 func NewHandler(service *serviceprojects.Service) *Handler {
@@ -94,6 +131,8 @@ func (h *Handler) Create(ctx *gin.Context) {
 	project, err := h.service.Create(ctx.Request.Context(), serviceprojects.CreateProjectInput{
 		Name:        req.Name,
 		Description: req.Description,
+		Buckets:     toProjectBucketInputs(req.Buckets),
+		CDNs:        toProjectCDNInputs(req.CDNs),
 	})
 	if err != nil {
 		ctx.Error(err)
@@ -119,6 +158,8 @@ func (h *Handler) Update(ctx *gin.Context) {
 	project, err := h.service.Update(ctx.Request.Context(), projectID, serviceprojects.UpdateProjectInput{
 		Name:        req.Name,
 		Description: req.Description,
+		Buckets:     toProjectBucketInputs(req.Buckets),
+		CDNs:        toProjectCDNInputs(req.CDNs),
 	})
 	if err != nil {
 		ctx.Error(err)
@@ -153,10 +194,65 @@ func projectIDFromParam(ctx *gin.Context) (uint64, error) {
 }
 
 func toProjectResponse(project *model.Project) projectResponse {
-	return projectResponse{
+	response := projectResponse{
 		ID:          project.ID,
 		Name:        project.Name,
 		Description: project.Description,
 		CreatedAt:   project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+
+	if len(project.Buckets) > 0 {
+		response.Buckets = make([]projectBucketResponse, 0, len(project.Buckets))
+		for _, bucket := range project.Buckets {
+			response.Buckets = append(response.Buckets, projectBucketResponse{
+				ID:           bucket.ID,
+				ProviderType: bucket.ProviderType,
+				BucketName:   bucket.BucketName,
+				Region:       bucket.Region,
+				IsPrimary:    bucket.IsPrimary,
+			})
+		}
+	}
+
+	if len(project.CDNs) > 0 {
+		response.CDNs = make([]projectCDNResponse, 0, len(project.CDNs))
+		for _, cdn := range project.CDNs {
+			response.CDNs = append(response.CDNs, projectCDNResponse{
+				ID:           cdn.ID,
+				ProviderType: cdn.ProviderType,
+				CDNEndpoint:  cdn.CDNEndpoint,
+				PurgeScope:   cdn.PurgeScope,
+				IsPrimary:    cdn.IsPrimary,
+			})
+		}
+	}
+
+	return response
+}
+
+func toProjectBucketInputs(requests []projectBucketRequest) []serviceprojects.ProjectBucketInput {
+	result := make([]serviceprojects.ProjectBucketInput, 0, len(requests))
+	for _, bucket := range requests {
+		result = append(result, serviceprojects.ProjectBucketInput{
+			ProviderType:         bucket.ProviderType,
+			BucketName:           bucket.BucketName,
+			Region:               bucket.Region,
+			CredentialCiphertext: bucket.CredentialCiphertext,
+			IsPrimary:            bucket.IsPrimary,
+		})
+	}
+	return result
+}
+
+func toProjectCDNInputs(requests []projectCDNRequest) []serviceprojects.ProjectCDNInput {
+	result := make([]serviceprojects.ProjectCDNInput, 0, len(requests))
+	for _, cdn := range requests {
+		result = append(result, serviceprojects.ProjectCDNInput{
+			ProviderType: cdn.ProviderType,
+			CDNEndpoint:  cdn.CDNEndpoint,
+			PurgeScope:   cdn.PurgeScope,
+			IsPrimary:    cdn.IsPrimary,
+		})
+	}
+	return result
 }
