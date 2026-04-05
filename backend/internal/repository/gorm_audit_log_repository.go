@@ -31,6 +31,12 @@ func (r *gormAuditLogRepository) List(ctx context.Context, filter AuditLogFilter
 	if filter.Action != "" {
 		query = query.Where("action = ?", filter.Action)
 	}
+	if filter.TargetType != "" {
+		query = query.Where("target_type = ?", filter.TargetType)
+	}
+	if filter.TargetIdentifier != "" {
+		query = query.Where("target_identifier LIKE ?", "%"+filter.TargetIdentifier+"%")
+	}
 	if filter.Result != "" {
 		query = query.Where("result = ?", filter.Result)
 	}

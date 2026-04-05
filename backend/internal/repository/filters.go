@@ -10,10 +10,12 @@ type ProjectFilter struct {
 }
 
 type AuditLogFilter struct {
-	ProjectID   *uint64
-	ActorUserID *uint64
-	Action      string
-	Result      string
-	Limit       int
-	Offset      int
+	ProjectID        *uint64
+	ActorUserID      *uint64
+	Action           string
+	TargetType       string
+	TargetIdentifier string
+	Result           string
+	Limit            int
+	Offset           int
 }
