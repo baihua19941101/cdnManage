@@ -9,6 +9,10 @@ const (
 	ProjectRoleAdmin       = "project_admin"
 	ProjectRoleReadOnly    = "project_read_only"
 	ProviderTypeUnknown    = "unknown"
+	ProviderTypeAliyun     = "aliyun"
+	ProviderTypeTencent    = "tencent_cloud"
+	ProviderTypeHuawei     = "huawei_cloud"
+	ProviderTypeQiniu      = "qiniu"
 	AuditResultSuccess     = "success"
 	AuditResultFailure     = "failure"
 	AuditResultDenied      = "denied"
@@ -30,6 +34,15 @@ func IsKnownPlatformRole(role string) bool {
 func IsKnownProjectRole(role string) bool {
 	switch role {
 	case ProjectRoleAdmin, ProjectRoleReadOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsKnownProviderType(providerType string) bool {
+	switch providerType {
+	case ProviderTypeUnknown, ProviderTypeAliyun, ProviderTypeTencent, ProviderTypeHuawei, ProviderTypeQiniu:
 		return true
 	default:
 		return false

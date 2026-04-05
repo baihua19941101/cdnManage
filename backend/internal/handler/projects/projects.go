@@ -45,7 +45,8 @@ type projectBucketRequest struct {
 	ProviderType         string `json:"providerType" binding:"required"`
 	BucketName           string `json:"bucketName" binding:"required"`
 	Region               string `json:"region"`
-	CredentialCiphertext string `json:"credentialCiphertext" binding:"required"`
+	Credential           string `json:"credential"`
+	CredentialCiphertext string `json:"credentialCiphertext"`
 	IsPrimary            bool   `json:"isPrimary"`
 }
 
@@ -57,11 +58,12 @@ type projectCDNRequest struct {
 }
 
 type projectBucketResponse struct {
-	ID           uint64 `json:"id"`
-	ProviderType string `json:"providerType"`
-	BucketName   string `json:"bucketName"`
-	Region       string `json:"region"`
-	IsPrimary    bool   `json:"isPrimary"`
+	ID               uint64 `json:"id"`
+	ProviderType     string `json:"providerType"`
+	BucketName       string `json:"bucketName"`
+	Region           string `json:"region"`
+	CredentialMasked string `json:"credentialMasked,omitempty"`
+	IsPrimary        bool   `json:"isPrimary"`
 }
 
 type projectCDNResponse struct {
@@ -127,6 +129,10 @@ func (h *Handler) Create(ctx *gin.Context) {
 		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid create project request", gin.H{"error": err.Error()}))
 		return
 	}
+	if err := validateBucketCredentialRequests(req.Buckets); err != nil {
+		ctx.Error(err)
+		return
+	}
 
 	project, err := h.service.Create(ctx.Request.Context(), serviceprojects.CreateProjectInput{
 		Name:        req.Name,
@@ -152,6 +158,10 @@ func (h *Handler) Update(ctx *gin.Context) {
 	var req updateProjectRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid update project request", gin.H{"error": err.Error()}))
+		return
+	}
+	if err := validateBucketCredentialRequests(req.Buckets); err != nil {
+		ctx.Error(err)
 		return
 	}
 
@@ -205,11 +215,12 @@ func toProjectResponse(project *model.Project) projectResponse {
 		response.Buckets = make([]projectBucketResponse, 0, len(project.Buckets))
 		for _, bucket := range project.Buckets {
 			response.Buckets = append(response.Buckets, projectBucketResponse{
-				ID:           bucket.ID,
-				ProviderType: bucket.ProviderType,
-				BucketName:   bucket.BucketName,
-				Region:       bucket.Region,
-				IsPrimary:    bucket.IsPrimary,
+				ID:               bucket.ID,
+				ProviderType:     bucket.ProviderType,
+				BucketName:       bucket.BucketName,
+				Region:           bucket.Region,
+				CredentialMasked: bucket.CredentialCiphertext,
+				IsPrimary:        bucket.IsPrimary,
 			})
 		}
 	}
@@ -237,11 +248,21 @@ func toProjectBucketInputs(requests []projectBucketRequest) []serviceprojects.Pr
 			ProviderType:         bucket.ProviderType,
 			BucketName:           bucket.BucketName,
 			Region:               bucket.Region,
+			Credential:           bucket.Credential,
 			CredentialCiphertext: bucket.CredentialCiphertext,
 			IsPrimary:            bucket.IsPrimary,
 		})
 	}
 	return result
+}
+
+func validateBucketCredentialRequests(buckets []projectBucketRequest) error {
+	for _, bucket := range buckets {
+		if bucket.Credential == "" && bucket.CredentialCiphertext == "" {
+			return httpresp.NewAppError(http.StatusBadRequest, "validation_error", "bucket credential is required", nil)
+		}
+	}
+	return nil
 }
 
 func toProjectCDNInputs(requests []projectCDNRequest) []serviceprojects.ProjectCDNInput {
