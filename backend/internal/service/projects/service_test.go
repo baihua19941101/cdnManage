@@ -404,6 +404,150 @@ func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
 	require.Equal(t, "assets/new.css", providerStub.lastRename.TargetKey)
 }
 
+func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	cdnProviderStub := &fakeCDNProvider{
+		providerType: provider.TypeAliyun,
+		refreshURLsResult: provider.TaskResult{
+			TaskID:      "refresh-url-task-" + suffix,
+			Status:      "accepted",
+			SubmittedAt: time.Now().UTC(),
+		},
+	}
+	require.NoError(t, service.RegisterCDNProvider(cdnProviderStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "cdn-refresh-url-" + suffix,
+		Description: "cdn refresh url test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-cdn-url-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-url-" + suffix + ".example.com",
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	result, err := service.RefreshURLs(ctx, project.ID, RefreshURLsInput{
+		URLs: []string{" https://cdn.example.com/assets/app.js ", "", "https://cdn.example.com/assets/app.css"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, cdnProviderStub.refreshURLsResult.TaskID, result.TaskID)
+	require.Equal(t, "https://cdn-url-"+suffix+".example.com", cdnProviderStub.lastRefreshURLs.Endpoint)
+	require.Equal(t, []string{"https://cdn.example.com/assets/app.js", "https://cdn.example.com/assets/app.css"}, cdnProviderStub.lastRefreshURLs.URLs)
+	require.Equal(t, "LTAI_TEST", cdnProviderStub.lastRefreshURLs.Credential.AccessKeyID)
+}
+
+func TestServiceRefreshDirectoriesUsesProviderBoundary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	cdnProviderStub := &fakeCDNProvider{
+		providerType: provider.TypeAliyun,
+		refreshDirectoriesResult: provider.TaskResult{
+			TaskID:      "refresh-directory-task-" + suffix,
+			Status:      "accepted",
+			SubmittedAt: time.Now().UTC(),
+		},
+	}
+	require.NoError(t, service.RegisterCDNProvider(cdnProviderStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "cdn-refresh-directory-" + suffix,
+		Description: "cdn refresh directory test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-cdn-directory-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-directory-" + suffix + ".example.com",
+			PurgeScope:   "directory",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	result, err := service.RefreshDirectories(ctx, project.ID, RefreshDirectoriesInput{
+		Directories: []string{" /assets/ ", "", "/images/"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, cdnProviderStub.refreshDirectoriesResult.TaskID, result.TaskID)
+	require.Equal(t, "https://cdn-directory-"+suffix+".example.com", cdnProviderStub.lastRefreshDirectories.Endpoint)
+	require.Equal(t, []string{"/assets/", "/images/"}, cdnProviderStub.lastRefreshDirectories.Directories)
+	require.Equal(t, "LTAI_TEST", cdnProviderStub.lastRefreshDirectories.Credential.AccessKeyID)
+}
+
+func TestServiceSyncResourcesMapsProviderErrors(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	cdnProviderStub := &fakeCDNProvider{
+		providerType: provider.TypeAliyun,
+		syncResourcesErr: provider.NewError(
+			provider.TypeAliyun,
+			provider.ServiceCDN,
+			"sync_latest_resources",
+			provider.ErrCodeTimeout,
+			"provider timed out",
+			true,
+			nil,
+		),
+	}
+	require.NoError(t, service.RegisterCDNProvider(cdnProviderStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "cdn-sync-failure-" + suffix,
+		Description: "cdn sync failure test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-cdn-sync-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-sync-" + suffix + ".example.com",
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	_, err = service.SyncResources(ctx, project.ID, SyncResourcesInput{
+		Paths: []string{"assets/app.js"},
+	})
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 504, appErr.StatusCode)
+	require.Equal(t, "cdn_request_timeout", appErr.Code)
+	require.Equal(t, "https://cdn-sync-"+suffix+".example.com", cdnProviderStub.lastSyncResources.Endpoint)
+	require.Equal(t, "bucket-cdn-sync-"+suffix, cdnProviderStub.lastSyncResources.Bucket)
+	require.Equal(t, []string{"assets/app.js"}, cdnProviderStub.lastSyncResources.Paths)
+	require.True(t, cdnProviderStub.lastSyncResources.InvalidateCDN)
+}
+
 type fakeObjectStorageProvider struct {
 	providerType provider.Type
 	objects      []provider.ObjectInfo
@@ -446,4 +590,37 @@ func (f *fakeObjectStorageProvider) DeleteObject(_ context.Context, req provider
 func (f *fakeObjectStorageProvider) RenameObject(_ context.Context, req provider.RenameObjectRequest) error {
 	f.lastRename = req
 	return nil
+}
+
+type fakeCDNProvider struct {
+	providerType             provider.Type
+	refreshURLsResult        provider.TaskResult
+	refreshDirectoriesResult provider.TaskResult
+	syncResourcesResult      provider.TaskResult
+	syncResourcesErr         error
+	lastRefreshURLs          provider.RefreshURLsRequest
+	lastRefreshDirectories   provider.RefreshDirectoriesRequest
+	lastSyncResources        provider.SyncResourcesRequest
+}
+
+func (f *fakeCDNProvider) Type() provider.Type {
+	return f.providerType
+}
+
+func (f *fakeCDNProvider) RefreshURLs(_ context.Context, req provider.RefreshURLsRequest) (provider.TaskResult, error) {
+	f.lastRefreshURLs = req
+	return f.refreshURLsResult, nil
+}
+
+func (f *fakeCDNProvider) RefreshDirectories(_ context.Context, req provider.RefreshDirectoriesRequest) (provider.TaskResult, error) {
+	f.lastRefreshDirectories = req
+	return f.refreshDirectoriesResult, nil
+}
+
+func (f *fakeCDNProvider) SyncLatestResources(_ context.Context, req provider.SyncResourcesRequest) (provider.TaskResult, error) {
+	f.lastSyncResources = req
+	if f.syncResourcesErr != nil {
+		return provider.TaskResult{}, f.syncResourcesErr
+	}
+	return f.syncResourcesResult, nil
 }
