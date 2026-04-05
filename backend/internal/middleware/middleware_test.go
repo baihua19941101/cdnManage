@@ -15,6 +15,7 @@ import (
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 )
 
 func TestRequirePlatformWriteAllowsPlatformAdmin(t *testing.T) {
@@ -53,7 +54,7 @@ func TestRequireProjectWriteAllowsProjectAdmin(t *testing.T) {
 
 func TestRequireProjectWriteDeniesProjectReadOnlyAndWritesAudit(t *testing.T) {
 	auditRepo := &memoryAuditLogRepository{}
-	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditRepo))
+	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditservice.NewRecorder(auditRepo)))
 	t.Cleanup(func() {
 		SetDefaultAccessDeniedAuditor(nil)
 	})
@@ -95,7 +96,7 @@ func TestRequireProjectWriteDeniesProjectReadOnlyAndWritesAudit(t *testing.T) {
 
 func TestRequireProjectWriteDeniesStorageMutationAndWritesAudit(t *testing.T) {
 	auditRepo := &memoryAuditLogRepository{}
-	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditRepo))
+	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditservice.NewRecorder(auditRepo)))
 	t.Cleanup(func() {
 		SetDefaultAccessDeniedAuditor(nil)
 	})
@@ -157,7 +158,7 @@ func TestProjectScopeResolverInjectsProjectRoleForAuthorizedUser(t *testing.T) {
 
 func TestProjectScopeResolverDeniesUnauthorizedProjectAndWritesAudit(t *testing.T) {
 	auditRepo := &memoryAuditLogRepository{}
-	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditRepo))
+	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditservice.NewRecorder(auditRepo)))
 	t.Cleanup(func() {
 		SetDefaultAccessDeniedAuditor(nil)
 	})

@@ -17,6 +17,7 @@ import (
 	"github.com/baihua19941101/cdnManage/internal/infra/secure"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	"github.com/baihua19941101/cdnManage/internal/service/bootstrap"
 	serviceprojects "github.com/baihua19941101/cdnManage/internal/service/projects"
@@ -48,6 +49,7 @@ func New() (*Application, error) {
 
 	store := repository.NewGormStore(db)
 	txManager := repository.NewGormTxManager(db)
+	auditRecorder := auditservice.NewRecorder(store.AuditLogs())
 	bootstrapService := bootstrap.NewService(
 		store.Users(),
 		store.AuditLogs(),
@@ -78,7 +80,7 @@ func New() (*Application, error) {
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
-	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
+	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
 		store.UserProjectRoles(),

@@ -2,16 +2,15 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/datatypes"
 
 	"github.com/baihua19941101/cdnManage/internal/config"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 )
 
 const bootstrapRequestID = "system-bootstrap"
@@ -66,14 +65,7 @@ func (s *Service) Run(ctx context.Context) error {
 			return fmt.Errorf("create bootstrap super admin: %w", err)
 		}
 
-		metadata, err := json.Marshal(map[string]string{
-			"source": "startup",
-		})
-		if err != nil {
-			return fmt.Errorf("marshal bootstrap audit metadata: %w", err)
-		}
-
-		if err := repos.AuditLogs().Create(ctx, &model.AuditLog{
+		if err := auditservice.NewRecorder(repos.AuditLogs()).Record(ctx, auditservice.RecordInput{
 			ActorUserID:      superAdmin.ID,
 			ProjectID:        nil,
 			Action:           "system.bootstrap_super_admin",
@@ -81,7 +73,9 @@ func (s *Service) Run(ctx context.Context) error {
 			TargetIdentifier: superAdmin.Email,
 			Result:           model.AuditResultSuccess,
 			RequestID:        bootstrapRequestID,
-			Metadata:         datatypes.JSON(metadata),
+			Metadata: map[string]interface{}{
+				"source": "startup",
+			},
 		}); err != nil {
 			return fmt.Errorf("create bootstrap audit log: %w", err)
 		}

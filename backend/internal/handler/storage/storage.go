@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/provider"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	serviceprojects "github.com/baihua19941101/cdnManage/internal/service/projects"
 )
@@ -27,6 +27,7 @@ type projectScopeMiddleware interface {
 type Handler struct {
 	projectService *serviceprojects.Service
 	audits         repository.AuditLogRepository
+	recorder       *auditservice.Recorder
 }
 
 type validateConnectionRequest struct {
@@ -77,7 +78,11 @@ type renameObjectRequest struct {
 }
 
 func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository) *Handler {
-	return &Handler{projectService: projectService, audits: audits}
+	return &Handler{
+		projectService: projectService,
+		audits:         audits,
+		recorder:       auditservice.NewRecorder(audits),
+	}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
@@ -421,23 +426,14 @@ func toAuditLogResponses(logs []model.AuditLog) []auditLogResponse {
 }
 
 func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, targetType, targetIdentifier, result string, details gin.H) {
-	if h == nil || h.audits == nil {
+	if h == nil || h.recorder == nil {
 		return
 	}
 	userID, ok := middleware.CurrentUserID(ctx)
 	if !ok {
 		return
 	}
-
-	var metadata datatypes.JSON
-	if details != nil {
-		raw, err := json.Marshal(details)
-		if err == nil {
-			metadata = datatypes.JSON(raw)
-		}
-	}
-
-	_ = h.audits.Create(ctx.Request.Context(), &model.AuditLog{
+	_ = h.recorder.Record(ctx.Request.Context(), auditservice.RecordInput{
 		ActorUserID:      userID,
 		ProjectID:        &projectID,
 		Action:           action,
@@ -445,6 +441,6 @@ func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, target
 		TargetIdentifier: targetIdentifier,
 		Result:           result,
 		RequestID:        httpresp.GetRequestID(ctx),
-		Metadata:         metadata,
+		Metadata:         map[string]interface{}(details),
 	})
 }
