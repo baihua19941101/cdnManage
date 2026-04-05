@@ -36,6 +36,14 @@ func IsKnownProjectRole(role string) bool {
 	}
 }
 
+func CanReadPlatform(role string) bool {
+	return IsKnownPlatformRole(role)
+}
+
+func CanWritePlatform(role string) bool {
+	return IsPlatformAdminRole(role)
+}
+
 func CanReadProject(platformRole, projectRole string) bool {
 	if IsPlatformAdminRole(platformRole) {
 		return true

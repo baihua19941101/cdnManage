@@ -38,6 +38,18 @@ func CurrentProjectRole(ctx *gin.Context) (string, bool) {
 }
 
 func RequirePlatformAdmin() gin.HandlerFunc {
+	return RequirePlatformWrite()
+}
+
+func RequirePlatformRead() gin.HandlerFunc {
+	return RequirePlatformPermission(ReadPermission)
+}
+
+func RequirePlatformWrite() gin.HandlerFunc {
+	return RequirePlatformPermission(WritePermission)
+}
+
+func RequirePlatformPermission(level PermissionLevel) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		platformRole, ok := CurrentPlatformRole(ctx)
 		if !ok {
@@ -46,8 +58,23 @@ func RequirePlatformAdmin() gin.HandlerFunc {
 			return
 		}
 
-		if !model.IsPlatformAdminRole(platformRole) {
-			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "platform admin role is required", nil))
+		allowed := false
+		switch level {
+		case ReadPermission:
+			allowed = model.CanReadPlatform(platformRole)
+		case WritePermission:
+			allowed = model.CanWritePlatform(platformRole)
+		default:
+			ctx.Error(httpresp.NewAppError(http.StatusInternalServerError, "invalid_permission_level", "permission level is invalid", nil))
+			ctx.Abort()
+			return
+		}
+
+		if !allowed {
+			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "platform role does not permit this action", gin.H{
+				"permissionLevel": level,
+				"platformRole":    platformRole,
+			}))
 			ctx.Abort()
 			return
 		}
