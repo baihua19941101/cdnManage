@@ -18,6 +18,10 @@ type Handler struct {
 	service *serviceprojects.Service
 }
 
+type projectScopeMiddleware interface {
+	Middleware() gin.HandlerFunc
+}
+
 type createProjectRequest struct {
 	Name        string                 `json:"name" binding:"required"`
 	Description string                 `json:"description"`
@@ -78,7 +82,7 @@ func NewHandler(service *serviceprojects.Service) *Handler {
 	return &Handler{service: service}
 }
 
-func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service) {
+func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
 	group := router.Group("/api/v1/projects")
 	group.Use(middleware.Authentication(authenticator))
 	group.Use(middleware.RequirePlatformAdmin())
@@ -88,6 +92,14 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	group.GET("/:id", handler.Get)
 	group.PUT("/:id", handler.Update)
 	group.DELETE("/:id", handler.Delete)
+
+	projectGroup := router.Group("/api/v1/projects/:id")
+	projectGroup.Use(middleware.Authentication(authenticator))
+	if projectScope != nil {
+		projectGroup.Use(projectScope.Middleware())
+	}
+	projectGroup.GET("/cdns", middleware.RequireProjectRead(), handler.GetCDNs)
+	projectGroup.PUT("/cdns", middleware.RequireProjectWrite(), handler.UpdateCDNs)
 }
 
 func (h *Handler) List(ctx *gin.Context) {
@@ -192,6 +204,68 @@ func (h *Handler) Delete(ctx *gin.Context) {
 	}
 
 	httpresp.Success(ctx, gin.H{"message": "project deleted"})
+}
+
+func (h *Handler) GetCDNs(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	cdns, err := h.service.GetCDNs(ctx.Request.Context(), projectID)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	response := make([]projectCDNResponse, 0, len(cdns))
+	for _, cdn := range cdns {
+		response = append(response, projectCDNResponse{
+			ID:           cdn.ID,
+			ProviderType: cdn.ProviderType,
+			CDNEndpoint:  cdn.CDNEndpoint,
+			PurgeScope:   cdn.PurgeScope,
+			IsPrimary:    cdn.IsPrimary,
+		})
+	}
+
+	httpresp.Success(ctx, gin.H{"cdns": response})
+}
+
+func (h *Handler) UpdateCDNs(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	var req struct {
+		CDNs []projectCDNRequest `json:"cdns" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid update project cdns request", gin.H{"error": err.Error()}))
+		return
+	}
+
+	cdns, err := h.service.UpdateCDNs(ctx.Request.Context(), projectID, toProjectCDNInputs(req.CDNs))
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	response := make([]projectCDNResponse, 0, len(cdns))
+	for _, cdn := range cdns {
+		response = append(response, projectCDNResponse{
+			ID:           cdn.ID,
+			ProviderType: cdn.ProviderType,
+			CDNEndpoint:  cdn.CDNEndpoint,
+			PurgeScope:   cdn.PurgeScope,
+			IsPrimary:    cdn.IsPrimary,
+		})
+	}
+
+	httpresp.Success(ctx, gin.H{"cdns": response})
 }
 
 func projectIDFromParam(ctx *gin.Context) (uint64, error) {

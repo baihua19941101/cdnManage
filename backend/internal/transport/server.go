@@ -37,7 +37,7 @@ func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handle
 		userhandler.RegisterRoutes(router, userHandler, authenticator)
 	}
 	if projectHandler != nil && authenticator != nil {
-		projecthandler.RegisterRoutes(router, projectHandler, authenticator)
+		projecthandler.RegisterRoutes(router, projectHandler, authenticator, projectScope)
 	}
 	if storageHandler != nil && authenticator != nil {
 		storagehandler.RegisterRoutes(router, storageHandler, authenticator, projectScope)
