@@ -59,6 +59,7 @@ func New() (*Application, error) {
 	)
 	authHandler := authhandler.NewHandler(authService)
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
+	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
 		store.UserProjectRoles(),
 		middleware.NewRedisUserProjectRoleCache(newRedisAdapter(redisClient)),

@@ -54,6 +54,7 @@ func RequirePlatformPermission(level PermissionLevel) gin.HandlerFunc {
 }
 
 func RequirePlatformPermissionWithAudit(level PermissionLevel, auditor *AccessDeniedAuditor) gin.HandlerFunc {
+	auditRecorder := currentAccessDeniedAuditor(auditor)
 	return func(ctx *gin.Context) {
 		platformRole, ok := CurrentPlatformRole(ctx)
 		if !ok {
@@ -79,8 +80,8 @@ func RequirePlatformPermissionWithAudit(level PermissionLevel, auditor *AccessDe
 				"permissionLevel": level,
 				"platformRole":    platformRole,
 			}
-			if auditor != nil {
-				auditor.RecordPermissionDenied(ctx, details)
+			if auditRecorder != nil {
+				auditRecorder.RecordPermissionDenied(ctx, details)
 			}
 			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "platform role does not permit this action", details))
 			ctx.Abort()
@@ -104,6 +105,7 @@ func RequireProjectPermission(level PermissionLevel) gin.HandlerFunc {
 }
 
 func RequireProjectPermissionWithAudit(level PermissionLevel, auditor *AccessDeniedAuditor) gin.HandlerFunc {
+	auditRecorder := currentAccessDeniedAuditor(auditor)
 	return func(ctx *gin.Context) {
 		platformRole, ok := CurrentPlatformRole(ctx)
 		if !ok {
@@ -131,8 +133,8 @@ func RequireProjectPermissionWithAudit(level PermissionLevel, auditor *AccessDen
 				"platformRole":    platformRole,
 				"projectRole":     projectRole,
 			}
-			if auditor != nil {
-				auditor.RecordPermissionDenied(ctx, details)
+			if auditRecorder != nil {
+				auditRecorder.RecordPermissionDenied(ctx, details)
 			}
 			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "insufficient role for requested operation", details))
 			ctx.Abort()

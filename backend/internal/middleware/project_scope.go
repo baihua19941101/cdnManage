@@ -51,6 +51,7 @@ func (r *ProjectScopeResolver) WithAuditor(auditor *AccessDeniedAuditor) *Projec
 }
 
 func (r *ProjectScopeResolver) Middleware() gin.HandlerFunc {
+	auditRecorder := currentAccessDeniedAuditor(r.auditor)
 	return func(ctx *gin.Context) {
 		projectID, err := currentProjectIDFromRoute(ctx)
 		if err != nil {
@@ -93,8 +94,8 @@ func (r *ProjectScopeResolver) Middleware() gin.HandlerFunc {
 			details := gin.H{
 				"projectID": projectID,
 			}
-			if r.auditor != nil {
-				r.auditor.RecordProjectScopeDenied(ctx, projectID, details)
+			if auditRecorder != nil {
+				auditRecorder.RecordProjectScopeDenied(ctx, projectID, details)
 			}
 			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "project_scope_denied", "project is outside the authorized scope", details))
 			ctx.Abort()

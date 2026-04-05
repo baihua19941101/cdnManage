@@ -21,8 +21,22 @@ type AccessDeniedAuditor struct {
 	audits repository.AuditLogRepository
 }
 
+var defaultAccessDeniedAuditor *AccessDeniedAuditor
+
 func NewAccessDeniedAuditor(audits repository.AuditLogRepository) *AccessDeniedAuditor {
 	return &AccessDeniedAuditor{audits: audits}
+}
+
+func SetDefaultAccessDeniedAuditor(auditor *AccessDeniedAuditor) {
+	defaultAccessDeniedAuditor = auditor
+}
+
+func currentAccessDeniedAuditor(auditor *AccessDeniedAuditor) *AccessDeniedAuditor {
+	if auditor != nil {
+		return auditor
+	}
+
+	return defaultAccessDeniedAuditor
 }
 
 func (a *AccessDeniedAuditor) RecordPermissionDenied(ctx *gin.Context, details gin.H) {
