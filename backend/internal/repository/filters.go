@@ -1,5 +1,7 @@
 package repository
 
+import "time"
+
 type UserFilter struct {
 	Status       string
 	PlatformRole string
@@ -16,6 +18,8 @@ type AuditLogFilter struct {
 	TargetType       string
 	TargetIdentifier string
 	Result           string
+	CreatedAfter     *time.Time
+	CreatedBefore    *time.Time
 	Limit            int
 	Offset           int
 }
