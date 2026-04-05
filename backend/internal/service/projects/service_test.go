@@ -16,6 +16,7 @@ import (
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
 	"github.com/baihua19941101/cdnManage/internal/infra/secure"
 	"github.com/baihua19941101/cdnManage/internal/model"
+	"github.com/baihua19941101/cdnManage/internal/provider"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 )
 
@@ -165,4 +166,70 @@ func TestServiceCreateEncryptsCredentialAndGetByIDReturnsMaskedCredential(t *tes
 	require.Len(t, stored.Buckets, 1)
 	require.NotEqual(t, plaintext, stored.Buckets[0].CredentialCiphertext)
 	require.True(t, strings.HasPrefix(stored.Buckets[0].CredentialCiphertext, "v1:"))
+
+}
+
+func TestServiceValidateBucketConnectionMapsDetectionErrors(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+
+	t.Run("unsupported_provider_hint_maps_to_provider_not_supported", func(t *testing.T) {
+		credential := `{"accessKeyId":"LTAI123456","customFields":{"providerType":"not_supported"}}`
+		_, err := service.ValidateBucketConnection(ctx, ProjectBucketInput{
+			BucketName: "assets-oss",
+			Credential: credential,
+		})
+		require.Error(t, err)
+
+		appErr := &httpresp.AppError{}
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, 400, appErr.StatusCode)
+		require.Equal(t, "provider_not_supported", appErr.Code)
+	})
+
+	t.Run("unknown_access_key_pattern_maps_to_provider_connection_failed", func(t *testing.T) {
+		credential := `{"accessKeyId":""}`
+		_, err := service.ValidateBucketConnection(ctx, ProjectBucketInput{
+			BucketName: "bucket-without-access-key",
+			Credential: credential,
+		})
+		require.Error(t, err)
+
+		appErr := &httpresp.AppError{}
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, 400, appErr.StatusCode)
+		require.Equal(t, "provider_connection_failed", appErr.Code)
+	})
+
+	t.Run("unknown_pattern_maps_to_provider_connection_failed", func(t *testing.T) {
+		_, err := service.ValidateBucketConnection(ctx, ProjectBucketInput{
+			BucketName: "unknown-bucket",
+			Credential: "RANDOM_ACCESS_KEY_PATTERN",
+		})
+		require.Error(t, err)
+
+		appErr := &httpresp.AppError{}
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, 400, appErr.StatusCode)
+		require.Equal(t, "provider_connection_failed", appErr.Code)
+	})
+}
+
+func TestMapProviderDetectionErrorInvalidCredentials(t *testing.T) {
+	err := mapProviderDetectionError(provider.NewError(
+		provider.TypeUnknown,
+		provider.ServiceObjectStorage,
+		"detect_provider",
+		provider.ErrCodeInvalidCredentials,
+		"invalid credentials",
+		false,
+		nil,
+	))
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "invalid_bucket_credential", appErr.Code)
 }
