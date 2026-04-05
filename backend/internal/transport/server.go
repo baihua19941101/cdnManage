@@ -12,7 +12,11 @@ import (
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 )
 
-func NewRouter(authHandler *authhandler.Handler) *gin.Engine {
+type projectScopeMiddleware interface {
+	Middleware() gin.HandlerFunc
+}
+
+func NewRouter(authHandler *authhandler.Handler, _ projectScopeMiddleware) *gin.Engine {
 	router := gin.New()
 
 	router.Use(
@@ -29,9 +33,9 @@ func NewRouter(authHandler *authhandler.Handler) *gin.Engine {
 	return router
 }
 
-func NewServer(cfg *config.AppConfig, authHandler *authhandler.Handler) *http.Server {
+func NewServer(cfg *config.AppConfig, authHandler *authhandler.Handler, projectScope projectScopeMiddleware) *http.Server {
 	return &http.Server{
 		Addr:    ":" + strconv.Itoa(cfg.Server.Port),
-		Handler: NewRouter(authHandler),
+		Handler: NewRouter(authHandler, projectScope),
 	}
 }
