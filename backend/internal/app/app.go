@@ -58,11 +58,12 @@ func New() (*Application, error) {
 		serviceauth.NewTokenManager(cfg.JWT),
 	)
 	authHandler := authhandler.NewHandler(authService)
+	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
 	projectScopeResolver := middleware.NewProjectScopeResolver(
 		store.UserProjectRoles(),
 		middleware.NewRedisUserProjectRoleCache(newRedisAdapter(redisClient)),
 		5*time.Minute,
-	)
+	).WithAuditor(accessDeniedAuditor)
 
 	return &Application{
 		server: transport.NewServer(cfg, authHandler, projectScopeResolver),
