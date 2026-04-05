@@ -34,6 +34,7 @@ type ProjectScopeResolver struct {
 	roles    UserProjectRoleRepository
 	cache    UserProjectRoleCache
 	cacheTTL time.Duration
+	auditor  *AccessDeniedAuditor
 }
 
 func NewProjectScopeResolver(roles UserProjectRoleRepository, cache UserProjectRoleCache, cacheTTL time.Duration) *ProjectScopeResolver {
@@ -44,7 +45,13 @@ func NewProjectScopeResolver(roles UserProjectRoleRepository, cache UserProjectR
 	}
 }
 
+func (r *ProjectScopeResolver) WithAuditor(auditor *AccessDeniedAuditor) *ProjectScopeResolver {
+	r.auditor = auditor
+	return r
+}
+
 func (r *ProjectScopeResolver) Middleware() gin.HandlerFunc {
+	auditRecorder := currentAccessDeniedAuditor(r.auditor)
 	return func(ctx *gin.Context) {
 		projectID, err := currentProjectIDFromRoute(ctx)
 		if err != nil {
@@ -84,9 +91,13 @@ func (r *ProjectScopeResolver) Middleware() gin.HandlerFunc {
 
 		projectRole, exists := projectRoles[projectID]
 		if !exists {
-			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "project_scope_denied", "project is outside the authorized scope", gin.H{
+			details := gin.H{
 				"projectID": projectID,
-			}))
+			}
+			if auditRecorder != nil {
+				auditRecorder.RecordProjectScopeDenied(ctx, projectID, details)
+			}
+			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "project_scope_denied", "project is outside the authorized scope", details))
 			ctx.Abort()
 			return
 		}

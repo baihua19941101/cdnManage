@@ -50,6 +50,11 @@ func RequirePlatformWrite() gin.HandlerFunc {
 }
 
 func RequirePlatformPermission(level PermissionLevel) gin.HandlerFunc {
+	return RequirePlatformPermissionWithAudit(level, nil)
+}
+
+func RequirePlatformPermissionWithAudit(level PermissionLevel, auditor *AccessDeniedAuditor) gin.HandlerFunc {
+	auditRecorder := currentAccessDeniedAuditor(auditor)
 	return func(ctx *gin.Context) {
 		platformRole, ok := CurrentPlatformRole(ctx)
 		if !ok {
@@ -71,10 +76,14 @@ func RequirePlatformPermission(level PermissionLevel) gin.HandlerFunc {
 		}
 
 		if !allowed {
-			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "platform role does not permit this action", gin.H{
+			details := gin.H{
 				"permissionLevel": level,
 				"platformRole":    platformRole,
-			}))
+			}
+			if auditRecorder != nil {
+				auditRecorder.RecordPermissionDenied(ctx, details)
+			}
+			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "platform role does not permit this action", details))
 			ctx.Abort()
 			return
 		}
@@ -92,6 +101,11 @@ func RequireProjectWrite() gin.HandlerFunc {
 }
 
 func RequireProjectPermission(level PermissionLevel) gin.HandlerFunc {
+	return RequireProjectPermissionWithAudit(level, nil)
+}
+
+func RequireProjectPermissionWithAudit(level PermissionLevel, auditor *AccessDeniedAuditor) gin.HandlerFunc {
+	auditRecorder := currentAccessDeniedAuditor(auditor)
 	return func(ctx *gin.Context) {
 		platformRole, ok := CurrentPlatformRole(ctx)
 		if !ok {
@@ -114,7 +128,15 @@ func RequireProjectPermission(level PermissionLevel) gin.HandlerFunc {
 		}
 
 		if !allowed {
-			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "insufficient role for requested operation", nil))
+			details := gin.H{
+				"permissionLevel": level,
+				"platformRole":    platformRole,
+				"projectRole":     projectRole,
+			}
+			if auditRecorder != nil {
+				auditRecorder.RecordPermissionDenied(ctx, details)
+			}
+			ctx.Error(httpresp.NewAppError(http.StatusForbidden, "permission_denied", "insufficient role for requested operation", details))
 			ctx.Abort()
 			return
 		}
