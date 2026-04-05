@@ -42,7 +42,7 @@ type projectResponse struct {
 }
 
 type projectBucketRequest struct {
-	ProviderType         string `json:"providerType" binding:"required"`
+	ProviderType         string `json:"providerType"`
 	BucketName           string `json:"bucketName" binding:"required"`
 	Region               string `json:"region"`
 	Credential           string `json:"credential"`

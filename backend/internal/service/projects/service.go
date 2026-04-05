@@ -2,10 +2,14 @@ package projects
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/model"
+	"github.com/baihua19941101/cdnManage/internal/provider"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 )
 
@@ -86,7 +90,11 @@ func (s *Service) GetByID(ctx context.Context, projectID uint64) (*model.Project
 }
 
 func (s *Service) Create(ctx context.Context, input CreateProjectInput) (*model.Project, error) {
-	if err := validateBindings(input.Buckets, input.CDNs); err != nil {
+	normalizedBuckets, err := s.normalizeBucketsWithProviderDetection(input.Buckets)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBindings(normalizedBuckets, input.CDNs); err != nil {
 		return nil, err
 	}
 
@@ -98,7 +106,7 @@ func (s *Service) Create(ctx context.Context, input CreateProjectInput) (*model.
 		if err := repos.Projects().Create(ctx, project); err != nil {
 			return fmt.Errorf("create project: %w", err)
 		}
-		return s.replaceBindings(ctx, repos, project.ID, input.Buckets, input.CDNs)
+		return s.replaceBindings(ctx, repos, project.ID, normalizedBuckets, input.CDNs)
 	}); err != nil {
 		return nil, err
 	}
@@ -106,7 +114,11 @@ func (s *Service) Create(ctx context.Context, input CreateProjectInput) (*model.
 }
 
 func (s *Service) Update(ctx context.Context, projectID uint64, input UpdateProjectInput) (*model.Project, error) {
-	if err := validateBindings(input.Buckets, input.CDNs); err != nil {
+	normalizedBuckets, err := s.normalizeBucketsWithProviderDetection(input.Buckets)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBindings(normalizedBuckets, input.CDNs); err != nil {
 		return nil, err
 	}
 
@@ -121,7 +133,7 @@ func (s *Service) Update(ctx context.Context, projectID uint64, input UpdateProj
 		if err := repos.Projects().Update(ctx, project); err != nil {
 			return fmt.Errorf("update project: %w", err)
 		}
-		return s.replaceBindings(ctx, repos, projectID, input.Buckets, input.CDNs)
+		return s.replaceBindings(ctx, repos, projectID, normalizedBuckets, input.CDNs)
 	}); err != nil {
 		return nil, err
 	}
@@ -143,6 +155,14 @@ func (s *Service) Delete(ctx context.Context, projectID uint64) error {
 		}
 		return nil
 	})
+}
+
+func (s *Service) ValidateBucketConnection(_ context.Context, input ProjectBucketInput) (string, error) {
+	normalized, err := s.normalizeBucketWithProviderDetection(input)
+	if err != nil {
+		return "", err
+	}
+	return normalized.ProviderType, nil
 }
 
 func (s *Service) replaceBindings(ctx context.Context, repos repository.Repositories, projectID uint64, buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
@@ -222,6 +242,9 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 		if bucket.ProviderType == "" || bucket.BucketName == "" || bucketCredentialPlaintext(bucket) == "" {
 			return httpresp.NewAppError(400, "invalid_bucket_binding", "bucket binding is incomplete", nil)
 		}
+		if !model.IsKnownProviderType(bucket.ProviderType) || bucket.ProviderType == model.ProviderTypeUnknown {
+			return httpresp.NewAppError(400, "invalid_provider_type", "bucket provider type is invalid", nil)
+		}
 		if providerType == "" {
 			providerType = bucket.ProviderType
 		} else if providerType != bucket.ProviderType {
@@ -263,6 +286,97 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 	}
 
 	return nil
+}
+
+func (s *Service) normalizeBucketsWithProviderDetection(buckets []ProjectBucketInput) ([]ProjectBucketInput, error) {
+	normalized := make([]ProjectBucketInput, 0, len(buckets))
+	for _, bucket := range buckets {
+		resolved, err := s.normalizeBucketWithProviderDetection(bucket)
+		if err != nil {
+			return nil, err
+		}
+		normalized = append(normalized, resolved)
+	}
+	return normalized, nil
+}
+
+func (s *Service) normalizeBucketWithProviderDetection(bucket ProjectBucketInput) (ProjectBucketInput, error) {
+	credentialPlaintext := strings.TrimSpace(bucketCredentialPlaintext(bucket))
+	if credentialPlaintext == "" {
+		return bucket, httpresp.NewAppError(400, "invalid_bucket_binding", "bucket credential is required", nil)
+	}
+
+	requestedProvider := strings.TrimSpace(bucket.ProviderType)
+	credentialPayload := parseCredentialPayload(credentialPlaintext)
+	if requestedProvider != "" && requestedProvider != model.ProviderTypeUnknown {
+		if !model.IsKnownProviderType(requestedProvider) {
+			return bucket, httpresp.NewAppError(400, "invalid_provider_type", "bucket provider type is invalid", nil)
+		}
+		if credentialPayload.CustomFields == nil {
+			credentialPayload.CustomFields = map[string]string{}
+		}
+		credentialPayload.CustomFields["providerType"] = requestedProvider
+	}
+	detectedProvider, err := provider.DetectObjectStorageProvider(credentialPayload, bucket.BucketName)
+	if err != nil {
+		return bucket, mapProviderDetectionError(err)
+	}
+
+	if requestedProvider == "" || requestedProvider == model.ProviderTypeUnknown {
+		bucket.ProviderType = detectedProvider.String()
+		return bucket, nil
+	}
+
+	if requestedProvider != detectedProvider.String() {
+		return bucket, httpresp.NewAppError(400, "provider_type_mismatch", "requested provider type does not match detected provider type", map[string]string{
+			"requestedProviderType": requestedProvider,
+			"detectedProviderType":  detectedProvider.String(),
+		})
+	}
+
+	return bucket, nil
+}
+
+func parseCredentialPayload(credential string) provider.CredentialPayload {
+	type credentialJSON struct {
+		AccessKeyID     string            `json:"accessKeyId"`
+		AccessKeySecret string            `json:"accessKeySecret"`
+		SecurityToken   string            `json:"securityToken"`
+		CustomFields    map[string]string `json:"customFields"`
+	}
+
+	var parsed credentialJSON
+	if err := json.Unmarshal([]byte(credential), &parsed); err == nil && parsed.AccessKeyID != "" {
+		return provider.CredentialPayload{
+			AccessKeyID:     parsed.AccessKeyID,
+			AccessKeySecret: parsed.AccessKeySecret,
+			SecurityToken:   parsed.SecurityToken,
+			CustomFields:    parsed.CustomFields,
+		}
+	}
+
+	// Backward-compatible fallback: treat the raw credential string as access key ID.
+	return provider.CredentialPayload{
+		AccessKeyID: credential,
+	}
+}
+
+func mapProviderDetectionError(err error) error {
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		return httpresp.NewAppError(400, "provider_connection_failed", "bucket connection validation failed", nil)
+	}
+
+	switch providerErr.Code {
+	case provider.ErrCodeUnsupportedProvider:
+		return httpresp.NewAppError(400, "provider_not_supported", "detected provider is not supported", nil)
+	case provider.ErrCodeInvalidCredentials:
+		return httpresp.NewAppError(400, "invalid_bucket_credential", "bucket credential is invalid", nil)
+	default:
+		return httpresp.NewAppError(400, "provider_connection_failed", "bucket connection validation failed", map[string]string{
+			"providerErrorCode": string(providerErr.Code),
+		})
+	}
 }
 
 func bucketCredentialPlaintext(bucket ProjectBucketInput) string {

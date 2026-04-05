@@ -9,6 +9,7 @@ import (
 
 	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
 	projecthandler "github.com/baihua19941101/cdnManage/internal/handler/projects"
+	storagehandler "github.com/baihua19941101/cdnManage/internal/handler/storage"
 	userhandler "github.com/baihua19941101/cdnManage/internal/handler/users"
 	infraCache "github.com/baihua19941101/cdnManage/internal/infra/cache"
 	"github.com/baihua19941101/cdnManage/internal/infra/configloader"
@@ -75,6 +76,7 @@ func New() (*Application, error) {
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
 	projectHandler := projecthandler.NewHandler(projectService)
+	storageHandler := storagehandler.NewHandler(projectService)
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
@@ -84,7 +86,7 @@ func New() (*Application, error) {
 	).WithAuditor(accessDeniedAuditor)
 
 	return &Application{
-		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, authService, projectScopeResolver),
+		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, storageHandler, authService, projectScopeResolver),
 	}, nil
 }
 
