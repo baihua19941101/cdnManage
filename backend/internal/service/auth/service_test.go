@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/baihua19941101/cdnManage/internal/config"
+	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/repository"
@@ -145,4 +146,36 @@ func TestServiceChangePasswordSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ComparePassword(updatedUser.PasswordHash, "NewPassword123!"))
 	require.Error(t, ComparePassword(updatedUser.PasswordHash, "OldPassword123!"))
+}
+
+func TestServiceLoginRejectsDisabledUser(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	passwordHash, err := HashPassword("Password123!")
+	require.NoError(t, err)
+	user := &model.User{
+		Username:     "disabled-" + suffix,
+		Email:        "disabled-" + suffix + "@example.com",
+		PasswordHash: passwordHash,
+		Status:       model.UserStatusDisabled,
+		PlatformRole: model.PlatformRoleStandard,
+	}
+	require.NoError(t, store.Users().Create(ctx, user))
+
+	service := NewService(
+		store.Users(),
+		repository.NewGormTxManager(db),
+		NewTokenManager(config.JWTConfig{Secret: "test-secret", Issuer: "test-issuer", LifespanSeconds: 3600}),
+	)
+
+	_, err = service.Login(ctx, user.Email, "Password123!")
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 403, appErr.StatusCode)
+	require.Equal(t, "user_disabled", appErr.Code)
 }
