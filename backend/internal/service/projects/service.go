@@ -87,6 +87,12 @@ type RenameBucketObjectInput struct {
 	TargetKey  string
 }
 
+type projectCDNRepository interface {
+	ListByProjectID(ctx context.Context, projectID uint64) ([]model.ProjectCDN, error)
+	Delete(ctx context.Context, id uint64) error
+	Create(ctx context.Context, cdn *model.ProjectCDN) error
+}
+
 func NewService(projects repository.ProjectRepository, tx repository.TxManager, cipher ...credentialCipher) *Service {
 	var credentialCipherInstance credentialCipher
 	if len(cipher) > 0 {
@@ -193,6 +199,37 @@ func (s *Service) Delete(ctx context.Context, projectID uint64) error {
 		}
 		return nil
 	})
+}
+
+func (s *Service) GetCDNs(ctx context.Context, projectID uint64) ([]model.ProjectCDN, error) {
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+	return project.CDNs, nil
+}
+
+func (s *Service) UpdateCDNs(ctx context.Context, projectID uint64, cdns []ProjectCDNInput) ([]model.ProjectCDN, error) {
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+	if err := validateCDNBindingsWithProviderType(projectBucketProviderType(project.Buckets), cdns); err != nil {
+		return nil, err
+	}
+
+	if err := s.tx.WithinTransaction(ctx, func(repos repository.Repositories) error {
+		project.Name = project.Name
+		return replaceCDNBindings(ctx, repos.ProjectCDNs(), projectID, cdns)
+	}); err != nil {
+		return nil, err
+	}
+
+	updated, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+	return updated.CDNs, nil
 }
 
 func (s *Service) ValidateBucketConnection(_ context.Context, input ProjectBucketInput) (string, error) {
@@ -321,14 +358,8 @@ func (s *Service) replaceBindings(ctx context.Context, repos repository.Reposito
 		}
 	}
 
-	existingCDNs, err := repos.ProjectCDNs().ListByProjectID(ctx, projectID)
-	if err != nil {
-		return fmt.Errorf("list existing cdns: %w", err)
-	}
-	for _, cdn := range existingCDNs {
-		if err := repos.ProjectCDNs().Delete(ctx, cdn.ID); err != nil {
-			return fmt.Errorf("delete existing cdn: %w", err)
-		}
+	if err := replaceCDNBindings(ctx, repos.ProjectCDNs(), projectID, cdns); err != nil {
+		return err
 	}
 
 	for _, bucket := range buckets {
@@ -353,22 +384,6 @@ func (s *Service) replaceBindings(ctx context.Context, repos repository.Reposito
 		}
 	}
 
-	for _, cdn := range cdns {
-		purgeScope := cdn.PurgeScope
-		if purgeScope == "" {
-			purgeScope = "url"
-		}
-		if err := repos.ProjectCDNs().Create(ctx, &model.ProjectCDN{
-			ProjectID:    projectID,
-			ProviderType: cdn.ProviderType,
-			CDNEndpoint:  cdn.CDNEndpoint,
-			PurgeScope:   purgeScope,
-			IsPrimary:    cdn.IsPrimary,
-		}); err != nil {
-			return fmt.Errorf("create project cdn: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -376,35 +391,12 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 	if len(buckets) < 1 || len(buckets) > 2 {
 		return httpresp.NewAppError(400, "invalid_bucket_count", "project must bind 1 or 2 buckets", nil)
 	}
+	return validateCDNBindingsWithProviderType(projectBucketInputProviderType(buckets), cdns)
+}
+
+func validateCDNBindingsWithProviderType(providerType string, cdns []ProjectCDNInput) error {
 	if len(cdns) < 1 || len(cdns) > 2 {
 		return httpresp.NewAppError(400, "invalid_cdn_count", "project must bind 1 or 2 cdn endpoints", nil)
-	}
-
-	providerType := ""
-	primaryBucketCount := 0
-	seenBuckets := make(map[string]struct{}, len(buckets))
-	for _, bucket := range buckets {
-		if bucket.ProviderType == "" || bucket.BucketName == "" || bucketCredentialPlaintext(bucket) == "" {
-			return httpresp.NewAppError(400, "invalid_bucket_binding", "bucket binding is incomplete", nil)
-		}
-		if !model.IsKnownProviderType(bucket.ProviderType) || bucket.ProviderType == model.ProviderTypeUnknown {
-			return httpresp.NewAppError(400, "invalid_provider_type", "bucket provider type is invalid", nil)
-		}
-		if providerType == "" {
-			providerType = bucket.ProviderType
-		} else if providerType != bucket.ProviderType {
-			return httpresp.NewAppError(400, "inconsistent_provider_type", "all bindings must use the same provider type", nil)
-		}
-		if _, exists := seenBuckets[bucket.BucketName]; exists {
-			return httpresp.NewAppError(400, "duplicate_bucket_binding", "bucket bindings must be unique", nil)
-		}
-		seenBuckets[bucket.BucketName] = struct{}{}
-		if bucket.IsPrimary {
-			primaryBucketCount++
-		}
-	}
-	if primaryBucketCount != 1 {
-		return httpresp.NewAppError(400, "invalid_bucket_primary_binding", "exactly one primary bucket is required", nil)
 	}
 
 	primaryCDNCount := 0
@@ -430,6 +422,77 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 		return httpresp.NewAppError(400, "invalid_cdn_primary_binding", "exactly one primary cdn endpoint is required", nil)
 	}
 
+	return nil
+}
+
+func projectBucketInputProviderType(buckets []ProjectBucketInput) string {
+	providerType := ""
+	primaryBucketCount := 0
+	seenBuckets := make(map[string]struct{}, len(buckets))
+	for _, bucket := range buckets {
+		if bucket.ProviderType == "" || bucket.BucketName == "" || bucketCredentialPlaintext(bucket) == "" {
+			return ""
+		}
+		if !model.IsKnownProviderType(bucket.ProviderType) || bucket.ProviderType == model.ProviderTypeUnknown {
+			return ""
+		}
+		if providerType == "" {
+			providerType = bucket.ProviderType
+		} else if providerType != bucket.ProviderType {
+			return ""
+		}
+		if _, exists := seenBuckets[bucket.BucketName]; exists {
+			return ""
+		}
+		seenBuckets[bucket.BucketName] = struct{}{}
+		if bucket.IsPrimary {
+			primaryBucketCount++
+		}
+	}
+	if primaryBucketCount != 1 {
+		return ""
+	}
+	return providerType
+}
+
+func projectBucketProviderType(buckets []model.ProjectBucket) string {
+	providerType := ""
+	for _, bucket := range buckets {
+		if bucket.IsPrimary {
+			return bucket.ProviderType
+		}
+		if providerType == "" {
+			providerType = bucket.ProviderType
+		}
+	}
+	return providerType
+}
+
+func replaceCDNBindings(ctx context.Context, repo projectCDNRepository, projectID uint64, cdns []ProjectCDNInput) error {
+	existingCDNs, err := repo.ListByProjectID(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("list existing cdns: %w", err)
+	}
+	for _, cdn := range existingCDNs {
+		if err := repo.Delete(ctx, cdn.ID); err != nil {
+			return fmt.Errorf("delete existing cdn: %w", err)
+		}
+	}
+	for _, cdn := range cdns {
+		purgeScope := cdn.PurgeScope
+		if purgeScope == "" {
+			purgeScope = "url"
+		}
+		if err := repo.Create(ctx, &model.ProjectCDN{
+			ProjectID:    projectID,
+			ProviderType: cdn.ProviderType,
+			CDNEndpoint:  cdn.CDNEndpoint,
+			PurgeScope:   purgeScope,
+			IsPrimary:    cdn.IsPrimary,
+		}); err != nil {
+			return fmt.Errorf("create project cdn: %w", err)
+		}
+	}
 	return nil
 }
 
