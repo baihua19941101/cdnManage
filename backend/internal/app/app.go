@@ -75,6 +75,7 @@ func New() (*Application, error) {
 		txManager,
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
+	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())

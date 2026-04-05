@@ -2,11 +2,14 @@ package projects
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/model"
@@ -19,6 +22,8 @@ type Service struct {
 	tx               repository.TxManager
 	credentialCipher credentialCipher
 	providers        *provider.Registry
+	syncTaskCache    SyncTaskStatusCache
+	syncTaskTTL      time.Duration
 }
 
 type credentialCipher interface {
@@ -97,6 +102,12 @@ type RefreshDirectoriesInput struct {
 	Directories []string
 }
 
+type SyncResourcesInput struct {
+	CDNEndpoint string
+	BucketName  string
+	Paths       []string
+}
+
 type projectCDNRepository interface {
 	ListByProjectID(ctx context.Context, projectID uint64) ([]model.ProjectCDN, error)
 	Delete(ctx context.Context, id uint64) error
@@ -114,6 +125,7 @@ func NewService(projects repository.ProjectRepository, tx repository.TxManager, 
 		tx:               tx,
 		credentialCipher: credentialCipherInstance,
 		providers:        provider.NewRegistry(),
+		syncTaskTTL:      10 * time.Minute,
 	}
 }
 
@@ -123,6 +135,13 @@ func (s *Service) RegisterObjectStorageProvider(p provider.ObjectStorageProvider
 
 func (s *Service) RegisterCDNProvider(p provider.CDNProvider) error {
 	return s.providers.RegisterCDN(p)
+}
+
+func (s *Service) ConfigureSyncTaskStatusCache(cache SyncTaskStatusCache, ttl time.Duration) {
+	s.syncTaskCache = cache
+	if ttl > 0 {
+		s.syncTaskTTL = ttl
+	}
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
@@ -402,6 +421,77 @@ func (s *Service) RefreshDirectories(ctx context.Context, projectID uint64, inpu
 	})
 	if err != nil {
 		return provider.TaskResult{}, mapCDNOperationError(err, "refresh_directories")
+	}
+
+	return result, nil
+}
+
+func (s *Service) SyncResources(ctx context.Context, projectID uint64, input SyncResourcesInput) (provider.TaskResult, error) {
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return provider.TaskResult{}, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+
+	cdnBinding, err := selectProjectCDN(project, strings.TrimSpace(input.CDNEndpoint))
+	if err != nil {
+		return provider.TaskResult{}, err
+	}
+
+	cdnProvider, err := s.providers.CDN(provider.Type(cdnBinding.ProviderType))
+	if err != nil {
+		return provider.TaskResult{}, mapCDNOperationError(err, "sync_resources")
+	}
+
+	bucket, err := selectProjectBucket(project, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return provider.TaskResult{}, err
+	}
+
+	credentialPayload, err := s.bucketCredentialPayload(*bucket)
+	if err != nil {
+		return provider.TaskResult{}, err
+	}
+
+	paths := trimNonEmptyValues(input.Paths)
+	if len(paths) == 0 {
+		return provider.TaskResult{}, httpresp.NewAppError(400, "validation_error", "at least one path is required", nil)
+	}
+
+	result, err := cdnProvider.SyncLatestResources(ctx, provider.SyncResourcesRequest{
+		Endpoint:      cdnBinding.CDNEndpoint,
+		Bucket:        bucket.BucketName,
+		Region:        bucket.Region,
+		Paths:         paths,
+		Credential:    credentialPayload,
+		InvalidateCDN: true,
+	})
+	if err != nil {
+		return provider.TaskResult{}, mapCDNOperationError(err, "sync_resources")
+	}
+
+	if result.SubmittedAt.IsZero() {
+		result.SubmittedAt = time.Now().UTC()
+	}
+	if strings.TrimSpace(result.Status) == "" {
+		result.Status = "accepted"
+	}
+	if strings.TrimSpace(result.TaskID) == "" {
+		result.TaskID = newSyncTaskID()
+	}
+
+	if s.syncTaskCache != nil {
+		_ = s.syncTaskCache.Set(ctx, result.TaskID, SyncTaskStatus{
+			TaskID:            result.TaskID,
+			ProjectID:         projectID,
+			BucketName:        bucket.BucketName,
+			CDNEndpoint:       cdnBinding.CDNEndpoint,
+			Paths:             paths,
+			Status:            result.Status,
+			ProviderRequestID: result.ProviderRequestID,
+			SubmittedAt:       result.SubmittedAt,
+			CompletedAt:       result.CompletedAt,
+			Metadata:          result.Metadata,
+		}, s.syncTaskTTL)
 	}
 
 	return result, nil
@@ -848,6 +938,14 @@ func trimNonEmptyValues(values []string) []string {
 		}
 	}
 	return normalized
+}
+
+func newSyncTaskID() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return fmt.Sprintf("sync-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
 }
 
 func (s *Service) maskBucketCredentials(project *model.Project) {

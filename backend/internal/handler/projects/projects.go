@@ -93,6 +93,12 @@ type refreshDirectoriesRequest struct {
 	Directories []string `json:"directories" binding:"required"`
 }
 
+type syncResourcesRequest struct {
+	CDNEndpoint string   `json:"cdnEndpoint"`
+	BucketName  string   `json:"bucketName"`
+	Paths       []string `json:"paths" binding:"required"`
+}
+
 type cdnTaskResultResponse struct {
 	ProviderRequestID string            `json:"providerRequestId,omitempty"`
 	TaskID            string            `json:"taskId,omitempty"`
@@ -126,6 +132,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	projectGroup.PUT("/cdns", middleware.RequireProjectWrite(), handler.UpdateCDNs)
 	projectGroup.POST("/cdns/refresh-url", middleware.RequireProjectWrite(), handler.RefreshURLs)
 	projectGroup.POST("/cdns/refresh-directory", middleware.RequireProjectWrite(), handler.RefreshDirectories)
+	projectGroup.POST("/cdns/sync", middleware.RequireProjectWrite(), handler.SyncResources)
 }
 
 func (h *Handler) List(ctx *gin.Context) {
@@ -357,6 +364,44 @@ func (h *Handler) RefreshDirectories(ctx *gin.Context) {
 
 	h.recordAudit(ctx, projectID, "cdn.refresh_directory", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
 		"directories":       req.Directories,
+		"providerRequestId": result.ProviderRequestID,
+		"taskId":            result.TaskID,
+		"status":            result.Status,
+	})
+	httpresp.Success(ctx, toCDNTaskResultResponse(result))
+}
+
+func (h *Handler) SyncResources(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	var req syncResourcesRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid sync resources request", gin.H{"error": err.Error()}))
+		return
+	}
+
+	result, err := h.service.SyncResources(ctx.Request.Context(), projectID, serviceprojects.SyncResourcesInput{
+		CDNEndpoint: req.CDNEndpoint,
+		BucketName:  req.BucketName,
+		Paths:       req.Paths,
+	})
+	if err != nil {
+		h.recordAudit(ctx, projectID, "cdn.sync_resources", endpointOrPrimary(req.CDNEndpoint), model.AuditResultFailure, gin.H{
+			"bucketName": req.BucketName,
+			"paths":      req.Paths,
+			"error":      err.Error(),
+		})
+		ctx.Error(err)
+		return
+	}
+
+	h.recordAudit(ctx, projectID, "cdn.sync_resources", endpointOrPrimary(req.CDNEndpoint), model.AuditResultSuccess, gin.H{
+		"bucketName":        req.BucketName,
+		"paths":             req.Paths,
 		"providerRequestId": result.ProviderRequestID,
 		"taskId":            result.TaskID,
 		"status":            result.Status,
