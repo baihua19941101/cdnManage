@@ -2,92 +2,62 @@ package config
 
 import "errors"
 
-const (
-	defaultServerPort   = 8080
-	defaultRedisPort    = 6379
-	defaultMySQLPort    = 3306
-	defaultJWTIssuer    = "cdn-management-platform"
-	defaultRequestLimit = 100
-)
-
 // ServerConfig contains network settings for the HTTP server.
 type ServerConfig struct {
-	Port int
+	Port int `yaml:"port"`
 }
 
 // DatabaseConfig models persistent storage settings.
 type DatabaseConfig struct {
-	Host         string
-	Port         int
-	User         string
-	Password     string
-	Database     string
-	MaxOpenConns int
-	MaxIdleConns int
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	User         string `yaml:"user"`
+	Password     string `yaml:"password"`
+	Database     string `yaml:"database"`
+	MaxOpenConns int    `yaml:"max_open_conns"`
+	MaxIdleConns int    `yaml:"max_idle_conns"`
 }
 
 // RedisConfig holds cache/session connection metadata.
 type RedisConfig struct {
-	Host     string
-	Port     int
-	Password string
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Password string `yaml:"password"`
 }
 
 // JWTConfig contains token signing secrets and metadata.
 type JWTConfig struct {
-	Secret          string
-	Issuer          string
-	LifespanSeconds int
+	Secret          string `yaml:"secret"`
+	Issuer          string `yaml:"issuer"`
+	LifespanSeconds int    `yaml:"lifespan_seconds"`
 }
 
 // SessionConfig captures server-side session secret.
 type SessionConfig struct {
-	Secret string
+	Secret string `yaml:"secret"`
 }
 
 // EncryptionConfig stores the application-level encryption key.
 type EncryptionConfig struct {
-	Key string
+	Key string `yaml:"key"`
 }
 
 // SuperAdminConfig defines the required info for the auto-provisioned super admin.
 type SuperAdminConfig struct {
-	Email    string
-	Password string
+	Email    string `yaml:"email"`
+	Password string `yaml:"password"`
 }
 
 // AppConfig aggregates all configurable properties.
 type AppConfig struct {
-	Server       ServerConfig
-	MySQL        DatabaseConfig
-	Redis        RedisConfig
-	JWT          JWTConfig
-	Session      SessionConfig
-	Encryption   EncryptionConfig
-	SuperAdmin   SuperAdminConfig
-	RequestLimit int
-}
-
-// NewDefault returns a config instance populated with safe defaults.
-func NewDefault() *AppConfig {
-	return &AppConfig{
-		Server: ServerConfig{
-			Port: defaultServerPort,
-		},
-		MySQL: DatabaseConfig{
-			Port:         defaultMySQLPort,
-			MaxOpenConns: 20,
-			MaxIdleConns: 5,
-		},
-		Redis: RedisConfig{
-			Port: defaultRedisPort,
-		},
-		JWT: JWTConfig{
-			Issuer:          defaultJWTIssuer,
-			LifespanSeconds: 3600,
-		},
-		RequestLimit: defaultRequestLimit,
-	}
+	Server       ServerConfig     `yaml:"server"`
+	MySQL        DatabaseConfig   `yaml:"mysql"`
+	Redis        RedisConfig      `yaml:"redis"`
+	JWT          JWTConfig        `yaml:"jwt"`
+	Session      SessionConfig    `yaml:"session"`
+	Encryption   EncryptionConfig `yaml:"encryption"`
+	SuperAdmin   SuperAdminConfig `yaml:"super_admin"`
+	RequestLimit int              `yaml:"request_limit"`
 }
 
 // Validate ensures required fields are present.
@@ -105,8 +75,14 @@ func (c *AppConfig) Validate() error {
 		return errors.New("mysql database is required")
 	case c.Redis.Host == "":
 		return errors.New("redis host is required")
+	case c.Redis.Port <= 0:
+		return errors.New("redis port must be positive")
 	case c.JWT.Secret == "":
 		return errors.New("jwt secret is required")
+	case c.JWT.Issuer == "":
+		return errors.New("jwt issuer is required")
+	case c.JWT.LifespanSeconds <= 0:
+		return errors.New("jwt lifespan_seconds must be positive")
 	case c.Session.Secret == "":
 		return errors.New("session secret is required")
 	case c.Encryption.Key == "":
@@ -115,6 +91,8 @@ func (c *AppConfig) Validate() error {
 		return errors.New("super admin email is required")
 	case c.SuperAdmin.Password == "":
 		return errors.New("super admin password is required")
+	case c.RequestLimit <= 0:
+		return errors.New("request limit must be positive")
 	}
 	return nil
 }
