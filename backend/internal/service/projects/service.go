@@ -10,8 +10,14 @@ import (
 )
 
 type Service struct {
-	projects repository.ProjectRepository
-	tx       repository.TxManager
+	projects         repository.ProjectRepository
+	tx               repository.TxManager
+	credentialCipher credentialCipher
+}
+
+type credentialCipher interface {
+	Encrypt(plaintext string) (string, error)
+	Decrypt(ciphertext string) (string, error)
 }
 
 type CreateProjectInput struct {
@@ -32,6 +38,7 @@ type ProjectBucketInput struct {
 	ProviderType         string
 	BucketName           string
 	Region               string
+	Credential           string
 	CredentialCiphertext string
 	IsPrimary            bool
 }
@@ -43,15 +50,30 @@ type ProjectCDNInput struct {
 	IsPrimary    bool
 }
 
-func NewService(projects repository.ProjectRepository, tx repository.TxManager) *Service {
+func NewService(projects repository.ProjectRepository, tx repository.TxManager, cipher ...credentialCipher) *Service {
+	var credentialCipherInstance credentialCipher
+	if len(cipher) > 0 {
+		credentialCipherInstance = cipher[0]
+	}
+
 	return &Service{
-		projects: projects,
-		tx:       tx,
+		projects:         projects,
+		tx:               tx,
+		credentialCipher: credentialCipherInstance,
 	}
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
-	return s.projects.List(ctx, filter)
+	projects, err := s.projects.List(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	for index := range projects {
+		s.maskBucketCredentials(&projects[index])
+	}
+
+	return projects, nil
 }
 
 func (s *Service) GetByID(ctx context.Context, projectID uint64) (*model.Project, error) {
@@ -59,6 +81,7 @@ func (s *Service) GetByID(ctx context.Context, projectID uint64) (*model.Project
 	if err != nil {
 		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
 	}
+	s.maskBucketCredentials(project)
 	return project, nil
 }
 
@@ -75,7 +98,7 @@ func (s *Service) Create(ctx context.Context, input CreateProjectInput) (*model.
 		if err := repos.Projects().Create(ctx, project); err != nil {
 			return fmt.Errorf("create project: %w", err)
 		}
-		return replaceBindings(ctx, repos, project.ID, input.Buckets, input.CDNs)
+		return s.replaceBindings(ctx, repos, project.ID, input.Buckets, input.CDNs)
 	}); err != nil {
 		return nil, err
 	}
@@ -98,7 +121,7 @@ func (s *Service) Update(ctx context.Context, projectID uint64, input UpdateProj
 		if err := repos.Projects().Update(ctx, project); err != nil {
 			return fmt.Errorf("update project: %w", err)
 		}
-		return replaceBindings(ctx, repos, projectID, input.Buckets, input.CDNs)
+		return s.replaceBindings(ctx, repos, projectID, input.Buckets, input.CDNs)
 	}); err != nil {
 		return nil, err
 	}
@@ -122,7 +145,7 @@ func (s *Service) Delete(ctx context.Context, projectID uint64) error {
 	})
 }
 
-func replaceBindings(ctx context.Context, repos repository.Repositories, projectID uint64, buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
+func (s *Service) replaceBindings(ctx context.Context, repos repository.Repositories, projectID uint64, buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
 	existingBuckets, err := repos.ProjectBuckets().ListByProjectID(ctx, projectID)
 	if err != nil {
 		return fmt.Errorf("list existing buckets: %w", err)
@@ -144,12 +167,21 @@ func replaceBindings(ctx context.Context, repos repository.Repositories, project
 	}
 
 	for _, bucket := range buckets {
+		credentialCiphertext := bucket.CredentialCiphertext
+		if s.credentialCipher != nil {
+			encrypted, err := s.credentialCipher.Encrypt(bucketCredentialPlaintext(bucket))
+			if err != nil {
+				return fmt.Errorf("encrypt bucket credential: %w", err)
+			}
+			credentialCiphertext = encrypted
+		}
+
 		if err := repos.ProjectBuckets().Create(ctx, &model.ProjectBucket{
 			ProjectID:            projectID,
 			ProviderType:         bucket.ProviderType,
 			BucketName:           bucket.BucketName,
 			Region:               bucket.Region,
-			CredentialCiphertext: bucket.CredentialCiphertext,
+			CredentialCiphertext: credentialCiphertext,
 			IsPrimary:            bucket.IsPrimary,
 		}); err != nil {
 			return fmt.Errorf("create project bucket: %w", err)
@@ -187,7 +219,7 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 	primaryBucketCount := 0
 	seenBuckets := make(map[string]struct{}, len(buckets))
 	for _, bucket := range buckets {
-		if bucket.ProviderType == "" || bucket.BucketName == "" || bucket.CredentialCiphertext == "" {
+		if bucket.ProviderType == "" || bucket.BucketName == "" || bucketCredentialPlaintext(bucket) == "" {
 			return httpresp.NewAppError(400, "invalid_bucket_binding", "bucket binding is incomplete", nil)
 		}
 		if providerType == "" {
@@ -231,4 +263,38 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 	}
 
 	return nil
+}
+
+func bucketCredentialPlaintext(bucket ProjectBucketInput) string {
+	if bucket.Credential != "" {
+		return bucket.Credential
+	}
+	return bucket.CredentialCiphertext
+}
+
+func (s *Service) maskBucketCredentials(project *model.Project) {
+	if project == nil {
+		return
+	}
+	for index := range project.Buckets {
+		project.Buckets[index].CredentialCiphertext = s.maskCredential(project.Buckets[index].CredentialCiphertext)
+	}
+}
+
+func (s *Service) maskCredential(ciphertext string) string {
+	plaintext := ciphertext
+	if s.credentialCipher != nil {
+		decrypted, err := s.credentialCipher.Decrypt(ciphertext)
+		if err == nil {
+			plaintext = decrypted
+		}
+	}
+
+	if plaintext == "" {
+		return ""
+	}
+	if len(plaintext) <= 4 {
+		return "****"
+	}
+	return plaintext[:2] + "****" + plaintext[len(plaintext)-2:]
 }

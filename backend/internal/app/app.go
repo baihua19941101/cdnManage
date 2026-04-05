@@ -13,6 +13,7 @@ import (
 	infraCache "github.com/baihua19941101/cdnManage/internal/infra/cache"
 	"github.com/baihua19941101/cdnManage/internal/infra/configloader"
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
+	"github.com/baihua19941101/cdnManage/internal/infra/secure"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
@@ -71,6 +72,7 @@ func New() (*Application, error) {
 	projectService := serviceprojects.NewService(
 		store.Projects(),
 		txManager,
+		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
 	projectHandler := projecthandler.NewHandler(projectService)
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())

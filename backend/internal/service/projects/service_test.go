@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
+	"github.com/baihua19941101/cdnManage/internal/infra/secure"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 )
@@ -32,19 +34,6 @@ func newTestDB(t *testing.T) *gorm.DB {
 
 	require.NoError(t, db.Migrator().DropTable(model.AllModels()...))
 	require.NoError(t, infraDB.AutoMigrate(db))
-
-	t.Cleanup(func() {
-		for _, table := range []string{
-			"audit_logs",
-			"project_cdns",
-			"project_buckets",
-			"user_project_roles",
-			"projects",
-			"users",
-		} {
-			require.NoError(t, db.Exec("DELETE FROM "+table).Error)
-		}
-	})
 
 	return db
 }
@@ -134,4 +123,46 @@ func TestServiceCreateRejectsOutOfRangeBindingCounts(t *testing.T) {
 		require.Equal(t, 400, appErr.StatusCode)
 		require.Equal(t, "invalid_cdn_count", appErr.Code)
 	})
+}
+
+func TestServiceCreateEncryptsCredentialAndGetByIDReturnsMaskedCredential(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+	plaintext := "ak-secret-" + suffix
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "credential-mask-" + suffix,
+		Description: "credential security test",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: "aliyun",
+				BucketName:   "bucket-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   plaintext,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: "aliyun",
+				CDNEndpoint:  "https://cdn-" + suffix + ".example.com",
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, project.Buckets, 1)
+	require.NotEmpty(t, project.Buckets[0].CredentialCiphertext)
+	require.NotEqual(t, plaintext, project.Buckets[0].CredentialCiphertext)
+	require.Contains(t, project.Buckets[0].CredentialCiphertext, "****")
+
+	stored, err := store.Projects().GetByID(ctx, project.ID)
+	require.NoError(t, err)
+	require.Len(t, stored.Buckets, 1)
+	require.NotEqual(t, plaintext, stored.Buckets[0].CredentialCiphertext)
+	require.True(t, strings.HasPrefix(stored.Buckets[0].CredentialCiphertext, "v1:"))
 }
