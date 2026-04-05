@@ -17,6 +17,7 @@ type Service struct {
 	projects         repository.ProjectRepository
 	tx               repository.TxManager
 	credentialCipher credentialCipher
+	providers        *provider.Registry
 }
 
 type credentialCipher interface {
@@ -54,6 +55,13 @@ type ProjectCDNInput struct {
 	IsPrimary    bool
 }
 
+type ListBucketObjectsInput struct {
+	BucketName string
+	Prefix     string
+	Marker     string
+	MaxKeys    int
+}
+
 func NewService(projects repository.ProjectRepository, tx repository.TxManager, cipher ...credentialCipher) *Service {
 	var credentialCipherInstance credentialCipher
 	if len(cipher) > 0 {
@@ -64,7 +72,12 @@ func NewService(projects repository.ProjectRepository, tx repository.TxManager, 
 		projects:         projects,
 		tx:               tx,
 		credentialCipher: credentialCipherInstance,
+		providers:        provider.NewRegistry(),
 	}
+}
+
+func (s *Service) RegisterObjectStorageProvider(p provider.ObjectStorageProvider) error {
+	return s.providers.RegisterObjectStorage(p)
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
@@ -163,6 +176,42 @@ func (s *Service) ValidateBucketConnection(_ context.Context, input ProjectBucke
 		return "", err
 	}
 	return normalized.ProviderType, nil
+}
+
+func (s *Service) ListBucketObjects(ctx context.Context, projectID uint64, input ListBucketObjectsInput) ([]provider.ObjectInfo, error) {
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+
+	bucket, err := selectProjectBucket(project, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return nil, err
+	}
+
+	storageProvider, err := s.providers.ObjectStorage(provider.Type(bucket.ProviderType))
+	if err != nil {
+		return nil, mapProviderDetectionError(err)
+	}
+
+	credentialPayload, err := s.bucketCredentialPayload(*bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	objects, err := storageProvider.ListObjects(ctx, provider.ListObjectsRequest{
+		Bucket:     bucket.BucketName,
+		Region:     bucket.Region,
+		Prefix:     input.Prefix,
+		Marker:     input.Marker,
+		MaxKeys:    input.MaxKeys,
+		Credential: credentialPayload,
+	})
+	if err != nil {
+		return nil, mapObjectStorageListError(err)
+	}
+
+	return objects, nil
 }
 
 func (s *Service) replaceBindings(ctx context.Context, repos repository.Repositories, projectID uint64, buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
@@ -379,11 +428,70 @@ func mapProviderDetectionError(err error) error {
 	}
 }
 
+func mapObjectStorageListError(err error) error {
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		return httpresp.NewAppError(502, "provider_operation_failed", "list objects failed at provider boundary", nil)
+	}
+
+	switch providerErr.Code {
+	case provider.ErrCodeInvalidCredentials:
+		return httpresp.NewAppError(400, "invalid_bucket_credential", "bucket credential is invalid", nil)
+	case provider.ErrCodeNotFound:
+		return httpresp.NewAppError(404, "bucket_not_found", "bucket was not found on provider", nil)
+	default:
+		return httpresp.NewAppError(502, "provider_operation_failed", "list objects failed at provider boundary", map[string]string{
+			"providerErrorCode": string(providerErr.Code),
+		})
+	}
+}
+
 func bucketCredentialPlaintext(bucket ProjectBucketInput) string {
 	if bucket.Credential != "" {
 		return bucket.Credential
 	}
 	return bucket.CredentialCiphertext
+}
+
+func (s *Service) bucketCredentialPayload(bucket model.ProjectBucket) (provider.CredentialPayload, error) {
+	plaintext := bucket.CredentialCiphertext
+	if s.credentialCipher != nil {
+		decrypted, err := s.credentialCipher.Decrypt(bucket.CredentialCiphertext)
+		if err == nil {
+			plaintext = decrypted
+		}
+	}
+
+	payload := parseCredentialPayload(plaintext)
+	if strings.TrimSpace(payload.AccessKeyID) == "" {
+		return provider.CredentialPayload{}, httpresp.NewAppError(400, "invalid_bucket_credential", "bucket credential is invalid", nil)
+	}
+	return payload, nil
+}
+
+func selectProjectBucket(project *model.Project, bucketName string) (*model.ProjectBucket, error) {
+	if len(project.Buckets) == 0 {
+		return nil, httpresp.NewAppError(404, "bucket_binding_not_found", "project has no bucket binding", nil)
+	}
+
+	if bucketName != "" {
+		for i := range project.Buckets {
+			if project.Buckets[i].BucketName == bucketName {
+				return &project.Buckets[i], nil
+			}
+		}
+		return nil, httpresp.NewAppError(404, "bucket_binding_not_found", "requested bucket binding was not found", map[string]string{
+			"bucketName": bucketName,
+		})
+	}
+
+	for i := range project.Buckets {
+		if project.Buckets[i].IsPrimary {
+			return &project.Buckets[i], nil
+		}
+	}
+
+	return &project.Buckets[0], nil
 }
 
 func (s *Service) maskBucketCredentials(project *model.Project) {
