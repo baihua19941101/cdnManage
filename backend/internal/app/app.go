@@ -8,6 +8,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
+	projecthandler "github.com/baihua19941101/cdnManage/internal/handler/projects"
 	userhandler "github.com/baihua19941101/cdnManage/internal/handler/users"
 	infraCache "github.com/baihua19941101/cdnManage/internal/infra/cache"
 	"github.com/baihua19941101/cdnManage/internal/infra/configloader"
@@ -16,6 +17,7 @@ import (
 	"github.com/baihua19941101/cdnManage/internal/repository"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	"github.com/baihua19941101/cdnManage/internal/service/bootstrap"
+	serviceprojects "github.com/baihua19941101/cdnManage/internal/service/projects"
 	serviceusers "github.com/baihua19941101/cdnManage/internal/service/users"
 	"github.com/baihua19941101/cdnManage/internal/transport"
 )
@@ -66,6 +68,11 @@ func New() (*Application, error) {
 		txManager,
 	)
 	userHandler := userhandler.NewHandler(userService)
+	projectService := serviceprojects.NewService(
+		store.Projects(),
+		txManager,
+	)
+	projectHandler := projecthandler.NewHandler(projectService)
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
@@ -75,7 +82,7 @@ func New() (*Application, error) {
 	).WithAuditor(accessDeniedAuditor)
 
 	return &Application{
-		server: transport.NewServer(cfg, authHandler, userHandler, authService, projectScopeResolver),
+		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, authService, projectScopeResolver),
 	}, nil
 }
 
