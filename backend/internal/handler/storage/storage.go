@@ -53,6 +53,23 @@ type listObjectsResponse struct {
 	Objects []objectResponse `json:"objects"`
 }
 
+type auditLogResponse struct {
+	ID               uint64                 `json:"id"`
+	ActorUserID      uint64                 `json:"actorUserId"`
+	ActorUsername    string                 `json:"actorUsername,omitempty"`
+	Action           string                 `json:"action"`
+	TargetType       string                 `json:"targetType"`
+	TargetIdentifier string                 `json:"targetIdentifier"`
+	Result           string                 `json:"result"`
+	RequestID        string                 `json:"requestId"`
+	CreatedAt        string                 `json:"createdAt"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type listAuditLogsResponse struct {
+	Logs []auditLogResponse `json:"logs"`
+}
+
 type renameObjectRequest struct {
 	BucketName string `json:"bucketName"`
 	SourceKey  string `json:"sourceKey" binding:"required"`
@@ -76,6 +93,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	}
 	projectGroup.GET("/objects", middleware.RequireProjectRead(), handler.ListObjects)
 	projectGroup.GET("/download", middleware.RequireProjectRead(), handler.DownloadObject)
+	projectGroup.GET("/audits", middleware.RequireProjectRead(), handler.ListAuditLogs)
 	projectGroup.POST("/upload", middleware.RequireProjectWrite(), handler.UploadObject)
 	projectGroup.DELETE("/objects", middleware.RequireProjectWrite(), handler.DeleteObject)
 	projectGroup.PUT("/rename", middleware.RequireProjectWrite(), handler.RenameObject)
@@ -226,6 +244,52 @@ func (h *Handler) DownloadObject(ctx *gin.Context) {
 	ctx.DataFromReader(http.StatusOK, meta.ContentLength, contentType, reader, extraHeaders)
 }
 
+func (h *Handler) ListAuditLogs(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	limit := 20
+	if raw := ctx.Query("limit"); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed <= 0 {
+			ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "limit must be a positive integer", nil))
+			return
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if raw := ctx.Query("offset"); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 0 {
+			ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "offset must be zero or a positive integer", nil))
+			return
+		}
+		offset = parsed
+	}
+
+	logs, err := h.audits.List(ctx.Request.Context(), repository.AuditLogFilter{
+		ProjectID:        &projectID,
+		Action:           ctx.Query("action"),
+		TargetType:       "object",
+		TargetIdentifier: ctx.Query("path"),
+		Result:           ctx.Query("result"),
+		Limit:            limit,
+		Offset:           offset,
+	})
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	httpresp.Success(ctx, listAuditLogsResponse{
+		Logs: toAuditLogResponses(logs),
+	})
+}
+
 func (h *Handler) DeleteObject(ctx *gin.Context) {
 	projectID, err := projectIDFromParam(ctx)
 	if err != nil {
@@ -327,6 +391,33 @@ func objectTargetIdentifier(prefix, marker string) string {
 		return "list:" + prefix
 	}
 	return "list:" + prefix + ":" + marker
+}
+
+func toAuditLogResponses(logs []model.AuditLog) []auditLogResponse {
+	response := make([]auditLogResponse, 0, len(logs))
+	for _, log := range logs {
+		item := auditLogResponse{
+			ID:               log.ID,
+			ActorUserID:      log.ActorUserID,
+			Action:           log.Action,
+			TargetType:       log.TargetType,
+			TargetIdentifier: log.TargetIdentifier,
+			Result:           log.Result,
+			RequestID:        log.RequestID,
+			CreatedAt:        log.CreatedAt.Format(time.RFC3339),
+		}
+		if log.ActorUser.Username != "" {
+			item.ActorUsername = log.ActorUser.Username
+		}
+		if len(log.Metadata) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(log.Metadata, &metadata); err == nil {
+				item.Metadata = metadata
+			}
+		}
+		response = append(response, item)
+	}
+	return response
 }
 
 func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, targetType, targetIdentifier, result string, details gin.H) {
