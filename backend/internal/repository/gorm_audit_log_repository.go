@@ -40,6 +40,12 @@ func (r *gormAuditLogRepository) List(ctx context.Context, filter AuditLogFilter
 	if filter.Result != "" {
 		query = query.Where("result = ?", filter.Result)
 	}
+	if filter.CreatedAfter != nil {
+		query = query.Where("created_at >= ?", *filter.CreatedAfter)
+	}
+	if filter.CreatedBefore != nil {
+		query = query.Where("created_at <= ?", *filter.CreatedBefore)
+	}
 	if filter.Limit > 0 {
 		query = query.Limit(filter.Limit)
 	}

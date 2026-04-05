@@ -7,6 +7,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	audithandler "github.com/baihua19941101/cdnManage/internal/handler/audits"
 	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
 	projecthandler "github.com/baihua19941101/cdnManage/internal/handler/projects"
 	storagehandler "github.com/baihua19941101/cdnManage/internal/handler/storage"
@@ -80,6 +81,7 @@ func New() (*Application, error) {
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
+	auditHandler := audithandler.NewHandler(store.AuditLogs())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
@@ -89,7 +91,7 @@ func New() (*Application, error) {
 	).WithAuditor(accessDeniedAuditor)
 
 	return &Application{
-		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, storageHandler, authService, projectScopeResolver),
+		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, storageHandler, auditHandler, authService, projectScopeResolver),
 	}, nil
 }
 

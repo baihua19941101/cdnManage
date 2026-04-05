@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/baihua19941101/cdnManage/internal/config"
+	audithandler "github.com/baihua19941101/cdnManage/internal/handler/audits"
 	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
 	"github.com/baihua19941101/cdnManage/internal/handler/health"
 	projecthandler "github.com/baihua19941101/cdnManage/internal/handler/projects"
@@ -20,7 +21,7 @@ type projectScopeMiddleware interface {
 	Middleware() gin.HandlerFunc
 }
 
-func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *gin.Engine {
+func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, auditHandler *audithandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *gin.Engine {
 	router := gin.New()
 
 	router.Use(
@@ -42,13 +43,16 @@ func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handle
 	if storageHandler != nil && authenticator != nil {
 		storagehandler.RegisterRoutes(router, storageHandler, authenticator, projectScope)
 	}
+	if auditHandler != nil && authenticator != nil {
+		audithandler.RegisterRoutes(router, auditHandler, authenticator, projectScope)
+	}
 
 	return router
 }
 
-func NewServer(cfg *config.AppConfig, authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *http.Server {
+func NewServer(cfg *config.AppConfig, authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, auditHandler *audithandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *http.Server {
 	return &http.Server{
 		Addr:    ":" + strconv.Itoa(cfg.Server.Port),
-		Handler: NewRouter(authHandler, userHandler, projectHandler, storageHandler, authenticator, projectScope),
+		Handler: NewRouter(authHandler, userHandler, projectHandler, storageHandler, auditHandler, authenticator, projectScope),
 	}
 }
