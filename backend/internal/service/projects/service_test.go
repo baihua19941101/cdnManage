@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -291,10 +292,125 @@ func TestServiceListBucketObjectsUsesProviderBoundary(t *testing.T) {
 	require.Equal(t, 100, providerStub.lastRequest.MaxKeys)
 }
 
+func TestServiceUploadBucketObjectUsesProviderBoundary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &fakeObjectStorageProvider{providerType: provider.TypeAliyun}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-upload-" + suffix,
+		Description: "storage upload test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-upload-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-upload-" + suffix + ".example.com",
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	err = service.UploadBucketObject(ctx, project.ID, UploadBucketObjectInput{
+		Key:         "assets/logo.png",
+		ContentType: "image/png",
+		Size:        4,
+		Content:     strings.NewReader("data"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "bucket-upload-"+suffix, providerStub.lastUpload.Bucket)
+	require.Equal(t, "assets/logo.png", providerStub.lastUpload.Key)
+	require.Equal(t, "image/png", providerStub.lastUpload.ContentType)
+}
+
+func TestServiceDeleteBucketObjectUsesProviderBoundary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &fakeObjectStorageProvider{providerType: provider.TypeAliyun}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-delete-" + suffix,
+		Description: "storage delete test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-delete-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-delete-" + suffix + ".example.com",
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	err = service.DeleteBucketObject(ctx, project.ID, DeleteBucketObjectInput{Key: "assets/old.js"})
+	require.NoError(t, err)
+	require.Equal(t, "bucket-delete-"+suffix, providerStub.lastDelete.Bucket)
+	require.Equal(t, "assets/old.js", providerStub.lastDelete.Key)
+}
+
+func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &fakeObjectStorageProvider{providerType: provider.TypeAliyun}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-rename-" + suffix,
+		Description: "storage rename test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-rename-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-rename-" + suffix + ".example.com",
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	err = service.RenameBucketObject(ctx, project.ID, RenameBucketObjectInput{
+		SourceKey: "assets/old.css",
+		TargetKey: "assets/new.css",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "bucket-rename-"+suffix, providerStub.lastRename.Bucket)
+	require.Equal(t, "assets/old.css", providerStub.lastRename.SourceKey)
+	require.Equal(t, "assets/new.css", providerStub.lastRename.TargetKey)
+}
+
 type fakeObjectStorageProvider struct {
 	providerType provider.Type
 	objects      []provider.ObjectInfo
 	lastRequest  provider.ListObjectsRequest
+	lastUpload   provider.UploadObjectRequest
+	lastDelete   provider.DeleteObjectRequest
+	lastRename   provider.RenameObjectRequest
 }
 
 func (f *fakeObjectStorageProvider) Type() provider.Type {
@@ -310,7 +426,11 @@ func (f *fakeObjectStorageProvider) ListObjects(_ context.Context, req provider.
 	return f.objects, nil
 }
 
-func (f *fakeObjectStorageProvider) UploadObject(_ context.Context, _ provider.UploadObjectRequest) error {
+func (f *fakeObjectStorageProvider) UploadObject(_ context.Context, req provider.UploadObjectRequest) error {
+	f.lastUpload = req
+	if req.Content != nil {
+		_, _ = io.Copy(ioutil.Discard, req.Content)
+	}
 	return nil
 }
 
@@ -318,10 +438,12 @@ func (f *fakeObjectStorageProvider) DownloadObject(_ context.Context, _ provider
 	return nil, provider.ObjectMeta{}, nil
 }
 
-func (f *fakeObjectStorageProvider) DeleteObject(_ context.Context, _ provider.DeleteObjectRequest) error {
+func (f *fakeObjectStorageProvider) DeleteObject(_ context.Context, req provider.DeleteObjectRequest) error {
+	f.lastDelete = req
 	return nil
 }
 
-func (f *fakeObjectStorageProvider) RenameObject(_ context.Context, _ provider.RenameObjectRequest) error {
+func (f *fakeObjectStorageProvider) RenameObject(_ context.Context, req provider.RenameObjectRequest) error {
+	f.lastRename = req
 	return nil
 }

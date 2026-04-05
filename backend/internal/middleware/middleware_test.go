@@ -93,6 +93,40 @@ func TestRequireProjectWriteDeniesProjectReadOnlyAndWritesAudit(t *testing.T) {
 	require.Equal(t, model.ProjectRoleReadOnly, metadata["projectRole"])
 }
 
+func TestRequireProjectWriteDeniesStorageMutationAndWritesAudit(t *testing.T) {
+	auditRepo := &memoryAuditLogRepository{}
+	SetDefaultAccessDeniedAuditor(NewAccessDeniedAuditor(auditRepo))
+	t.Cleanup(func() {
+		SetDefaultAccessDeniedAuditor(nil)
+	})
+
+	router := newMiddlewareTestRouter()
+	router.PUT("/projects/:id/storage/rename", injectIdentity(model.PlatformRoleStandard, 1010), func(ctx *gin.Context) {
+		SetCurrentProjectID(ctx, 52)
+		SetCurrentProjectRole(ctx, model.ProjectRoleReadOnly)
+		ctx.Next()
+	}, RequireProjectWrite(), func(ctx *gin.Context) {
+		httpresp.Success(ctx, gin.H{"unexpected": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/projects/52/storage/rename", nil)
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+
+	logs, err := auditRepo.List(context.Background(), repository.AuditLogFilter{
+		ActorUserID: uint64Pointer(1010),
+		Action:      actionPermissionDenied,
+		Result:      model.AuditResultDenied,
+	})
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	require.Equal(t, "permission", logs[0].TargetType)
+	require.Equal(t, "PUT /projects/:id/storage/rename", logs[0].TargetIdentifier)
+}
+
 func TestProjectScopeResolverInjectsProjectRoleForAuthorizedUser(t *testing.T) {
 	resolver := NewProjectScopeResolver(&memoryUserProjectRoleRepository{
 		bindings: []model.UserProjectRole{
