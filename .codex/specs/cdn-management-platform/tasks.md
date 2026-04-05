@@ -28,7 +28,7 @@
     - 编写密码摘要与校验工具
     - 实现 `login`、`me`、`change-password` 的 handler、service、repository 调用链
     - _Requirements: 4.1, 4.3, 4.4, 8.1, 8.3_
-  - [ ] 3.3 实现认证中间件与统一身份上下文注入
+  - [x] 3.3 实现认证中间件与统一身份上下文注入
     - 解析登录态
     - 将用户身份注入请求上下文，供后续 RBAC 与项目作用域中间件复用
     - _Requirements: 4.3, 8.2, 8.3_

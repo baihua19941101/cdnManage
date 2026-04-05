@@ -2,11 +2,11 @@ package auth
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
+	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 )
@@ -40,8 +40,11 @@ func NewHandler(service *serviceauth.Service) *Handler {
 func RegisterRoutes(router gin.IRouter, handler *Handler) {
 	group := router.Group("/api/v1/auth")
 	group.POST("/login", handler.Login)
-	group.GET("/me", handler.Me)
-	group.POST("/change-password", handler.ChangePassword)
+
+	protected := group.Group("")
+	protected.Use(middleware.Authentication(handler.service))
+	protected.GET("/me", handler.Me)
+	protected.POST("/change-password", handler.ChangePassword)
 }
 
 func (h *Handler) Login(ctx *gin.Context) {
@@ -64,15 +67,9 @@ func (h *Handler) Login(ctx *gin.Context) {
 }
 
 func (h *Handler) Me(ctx *gin.Context) {
-	token, err := bearerToken(ctx)
-	if err != nil {
-		ctx.Error(err)
-		return
-	}
-
-	user, err := h.service.Me(ctx.Request.Context(), token)
-	if err != nil {
-		ctx.Error(err)
+	user, ok := middleware.CurrentUser(ctx)
+	if !ok {
+		ctx.Error(httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authenticated user is required", nil))
 		return
 	}
 
@@ -80,9 +77,9 @@ func (h *Handler) Me(ctx *gin.Context) {
 }
 
 func (h *Handler) ChangePassword(ctx *gin.Context) {
-	token, err := bearerToken(ctx)
-	if err != nil {
-		ctx.Error(err)
+	userID, ok := middleware.CurrentUserID(ctx)
+	if !ok {
+		ctx.Error(httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authenticated user is required", nil))
 		return
 	}
 
@@ -92,26 +89,12 @@ func (h *Handler) ChangePassword(ctx *gin.Context) {
 		return
 	}
 
-	if err := h.service.ChangePassword(ctx.Request.Context(), token, req.CurrentPassword, req.NewPassword); err != nil {
+	if err := h.service.ChangePassword(ctx.Request.Context(), userID, req.CurrentPassword, req.NewPassword); err != nil {
 		ctx.Error(err)
 		return
 	}
 
 	httpresp.Success(ctx, gin.H{"message": "password updated"})
-}
-
-func bearerToken(ctx *gin.Context) (string, error) {
-	header := strings.TrimSpace(ctx.GetHeader("Authorization"))
-	if header == "" {
-		return "", httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authorization header is required", nil)
-	}
-
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.TrimSpace(parts[1]) == "" {
-		return "", httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "invalid authorization header", nil)
-	}
-
-	return strings.TrimSpace(parts[1]), nil
 }
 
 func toUserResponse(user *model.User) userResponse {
