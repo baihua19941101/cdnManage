@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
@@ -60,6 +61,30 @@ type ListBucketObjectsInput struct {
 	Prefix     string
 	Marker     string
 	MaxKeys    int
+}
+
+type UploadBucketObjectInput struct {
+	BucketName  string
+	Key         string
+	ContentType string
+	Content     io.Reader
+	Size        int64
+}
+
+type DownloadBucketObjectInput struct {
+	BucketName string
+	Key        string
+}
+
+type DeleteBucketObjectInput struct {
+	BucketName string
+	Key        string
+}
+
+type RenameBucketObjectInput struct {
+	BucketName string
+	SourceKey  string
+	TargetKey  string
 }
 
 func NewService(projects repository.ProjectRepository, tx repository.TxManager, cipher ...credentialCipher) *Service {
@@ -179,22 +204,7 @@ func (s *Service) ValidateBucketConnection(_ context.Context, input ProjectBucke
 }
 
 func (s *Service) ListBucketObjects(ctx context.Context, projectID uint64, input ListBucketObjectsInput) ([]provider.ObjectInfo, error) {
-	project, err := s.projects.GetByID(ctx, projectID)
-	if err != nil {
-		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
-	}
-
-	bucket, err := selectProjectBucket(project, strings.TrimSpace(input.BucketName))
-	if err != nil {
-		return nil, err
-	}
-
-	storageProvider, err := s.providers.ObjectStorage(provider.Type(bucket.ProviderType))
-	if err != nil {
-		return nil, mapProviderDetectionError(err)
-	}
-
-	credentialPayload, err := s.bucketCredentialPayload(*bucket)
+	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +222,92 @@ func (s *Service) ListBucketObjects(ctx context.Context, projectID uint64, input
 	}
 
 	return objects, nil
+}
+
+func (s *Service) UploadBucketObject(ctx context.Context, projectID uint64, input UploadBucketObjectInput) error {
+	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(input.Key) == "" || input.Content == nil {
+		return httpresp.NewAppError(400, "validation_error", "object key and content are required", nil)
+	}
+
+	if err := storageProvider.UploadObject(ctx, provider.UploadObjectRequest{
+		Bucket:      bucket.BucketName,
+		Region:      bucket.Region,
+		Key:         strings.TrimSpace(input.Key),
+		ContentType: strings.TrimSpace(input.ContentType),
+		Content:     input.Content,
+		Size:        input.Size,
+		Credential:  credentialPayload,
+	}); err != nil {
+		return mapObjectStorageOperationError(err, "upload")
+	}
+	return nil
+}
+
+func (s *Service) DownloadBucketObject(ctx context.Context, projectID uint64, input DownloadBucketObjectInput) (io.ReadCloser, provider.ObjectMeta, error) {
+	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return nil, provider.ObjectMeta{}, err
+	}
+	if strings.TrimSpace(input.Key) == "" {
+		return nil, provider.ObjectMeta{}, httpresp.NewAppError(400, "validation_error", "object key is required", nil)
+	}
+
+	reader, meta, err := storageProvider.DownloadObject(ctx, provider.DownloadObjectRequest{
+		Bucket:     bucket.BucketName,
+		Region:     bucket.Region,
+		Key:        strings.TrimSpace(input.Key),
+		Credential: credentialPayload,
+	})
+	if err != nil {
+		return nil, provider.ObjectMeta{}, mapObjectStorageOperationError(err, "download")
+	}
+
+	return reader, meta, nil
+}
+
+func (s *Service) DeleteBucketObject(ctx context.Context, projectID uint64, input DeleteBucketObjectInput) error {
+	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(input.Key) == "" {
+		return httpresp.NewAppError(400, "validation_error", "object key is required", nil)
+	}
+
+	if err := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+		Bucket:     bucket.BucketName,
+		Region:     bucket.Region,
+		Key:        strings.TrimSpace(input.Key),
+		Credential: credentialPayload,
+	}); err != nil {
+		return mapObjectStorageOperationError(err, "delete")
+	}
+	return nil
+}
+
+func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, input RenameBucketObjectInput) error {
+	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(input.SourceKey) == "" || strings.TrimSpace(input.TargetKey) == "" {
+		return httpresp.NewAppError(400, "validation_error", "sourceKey and targetKey are required", nil)
+	}
+
+	if err := storageProvider.RenameObject(ctx, provider.RenameObjectRequest{
+		Bucket:     bucket.BucketName,
+		Region:     bucket.Region,
+		SourceKey:  strings.TrimSpace(input.SourceKey),
+		TargetKey:  strings.TrimSpace(input.TargetKey),
+		Credential: credentialPayload,
+	}); err != nil {
+		return mapObjectStorageOperationError(err, "rename")
+	}
+	return nil
 }
 
 func (s *Service) replaceBindings(ctx context.Context, repos repository.Repositories, projectID uint64, buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
@@ -446,6 +542,27 @@ func mapObjectStorageListError(err error) error {
 	}
 }
 
+func mapObjectStorageOperationError(err error, operation string) error {
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		return httpresp.NewAppError(502, "provider_operation_failed", "storage provider operation failed", map[string]string{
+			"operation": operation,
+		})
+	}
+
+	switch providerErr.Code {
+	case provider.ErrCodeInvalidCredentials:
+		return httpresp.NewAppError(400, "invalid_bucket_credential", "bucket credential is invalid", nil)
+	case provider.ErrCodeNotFound:
+		return httpresp.NewAppError(404, "storage_object_not_found", "storage object was not found", nil)
+	default:
+		return httpresp.NewAppError(502, "provider_operation_failed", "storage provider operation failed", map[string]string{
+			"providerErrorCode": string(providerErr.Code),
+			"operation":         operation,
+		})
+	}
+}
+
 func bucketCredentialPlaintext(bucket ProjectBucketInput) string {
 	if bucket.Credential != "" {
 		return bucket.Credential
@@ -492,6 +609,30 @@ func selectProjectBucket(project *model.Project, bucketName string) (*model.Proj
 	}
 
 	return &project.Buckets[0], nil
+}
+
+func (s *Service) resolveBucketProviderAndCredential(ctx context.Context, projectID uint64, bucketName string) (*model.ProjectBucket, provider.ObjectStorageProvider, provider.CredentialPayload, error) {
+	project, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+
+	bucket, err := selectProjectBucket(project, bucketName)
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, err
+	}
+
+	storageProvider, err := s.providers.ObjectStorage(provider.Type(bucket.ProviderType))
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, mapProviderDetectionError(err)
+	}
+
+	credentialPayload, err := s.bucketCredentialPayload(*bucket)
+	if err != nil {
+		return nil, nil, provider.CredentialPayload{}, err
+	}
+
+	return bucket, storageProvider, credentialPayload, nil
 }
 
 func (s *Service) maskBucketCredentials(project *model.Project) {

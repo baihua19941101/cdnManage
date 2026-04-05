@@ -76,7 +76,7 @@ func New() (*Application, error) {
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
 	projectHandler := projecthandler.NewHandler(projectService)
-	storageHandler := storagehandler.NewHandler(projectService)
+	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(store.AuditLogs())
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
