@@ -53,7 +53,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}, nil
 }
 
-func (s *Service) Me(ctx context.Context, token string) (*model.User, error) {
+func (s *Service) Authenticate(ctx context.Context, token string) (*model.User, error) {
 	claims, err := s.tokens.Parse(token)
 	if err != nil {
 		return nil, httpresp.NewAppError(401, "authentication_failed", "invalid token", nil)
@@ -71,19 +71,18 @@ func (s *Service) Me(ctx context.Context, token string) (*model.User, error) {
 	return user, nil
 }
 
-func (s *Service) ChangePassword(ctx context.Context, token, currentPassword, newPassword string) error {
-	claims, err := s.tokens.Parse(token)
-	if err != nil {
-		return httpresp.NewAppError(401, "authentication_failed", "invalid token", nil)
-	}
+func (s *Service) Me(ctx context.Context, token string) (*model.User, error) {
+	return s.Authenticate(ctx, token)
+}
 
+func (s *Service) ChangePassword(ctx context.Context, userID uint64, currentPassword, newPassword string) error {
 	newPasswordHash, err := HashPassword(newPassword)
 	if err != nil {
 		return fmt.Errorf("hash new password: %w", err)
 	}
 
 	return s.tx.WithinTransaction(ctx, func(repos repository.Repositories) error {
-		user, err := repos.Users().GetByID(ctx, claims.UserID)
+		user, err := repos.Users().GetByID(ctx, userID)
 		if err != nil {
 			return httpresp.NewAppError(401, "authentication_failed", "user not found", nil)
 		}
