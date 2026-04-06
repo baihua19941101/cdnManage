@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 
 import { AppProviders } from '../app/AppProviders'
 import { AppShell } from '../layouts/AppShell'
+import { CDNPage } from '../pages/CDNPage'
 import { DashboardPage } from '../pages/DashboardPage'
 import { LoginPage } from '../pages/LoginPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
@@ -59,15 +60,7 @@ export function AppRouter() {
               }
             />
             <Route path="storage" element={<StoragePage />} />
-            <Route
-              path="cdn"
-              element={
-                <ResourcePage
-                  title="CDN"
-                  description="Refresh and sync operation pages will land in task 12.2."
-                />
-              }
-            />
+            <Route path="cdn" element={<CDNPage />} />
             <Route
               path="audits"
               element={
