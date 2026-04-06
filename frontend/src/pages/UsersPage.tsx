@@ -25,6 +25,7 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { hasDuplicateProjectBindings } from './managementValidation'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type UserStatus = 'active' | 'disabled'
@@ -246,8 +247,7 @@ export function UsersPage() {
     const values = await bindingForm.validateFields()
     const bindings = values.bindings ?? []
 
-    const uniqueProjectIds = new Set(bindings.map((item) => item.projectId))
-    if (uniqueProjectIds.size !== bindings.length) {
+    if (hasDuplicateProjectBindings(bindings)) {
       messageApi.error('同一个项目不能重复绑定。')
       return
     }

@@ -25,6 +25,7 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { validateProjectBindingCounts } from './managementValidation'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type ProviderType = 'aliyun' | 'tencent_cloud' | 'huawei_cloud' | 'qiniu'
@@ -222,20 +223,14 @@ export function ProjectsPage() {
 
     const values = await form.validateFields()
 
-    if (values.buckets.length < 1 || values.buckets.length > 2) {
-      messageApi.error('存储桶绑定数量必须为 1 到 2 个。')
-      return
-    }
-    if (values.cdns.length < 1 || values.cdns.length > 2) {
-      messageApi.error('CDN 绑定数量必须为 1 到 2 个。')
-      return
-    }
-    if (values.buckets.filter((bucket) => bucket.isPrimary).length !== 1) {
-      messageApi.error('存储桶必须且只能设置一个主绑定。')
-      return
-    }
-    if (values.cdns.filter((cdn) => cdn.isPrimary).length !== 1) {
-      messageApi.error('CDN 必须且只能设置一个主绑定。')
+    const validationError = validateProjectBindingCounts({
+      bucketCount: values.buckets.length,
+      cdnCount: values.cdns.length,
+      primaryBucketCount: values.buckets.filter((bucket) => bucket.isPrimary).length,
+      primaryCDNCount: values.cdns.filter((cdn) => cdn.isPrimary).length,
+    })
+    if (validationError) {
+      messageApi.error(validationError)
       return
     }
 
