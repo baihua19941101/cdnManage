@@ -1,4 +1,9 @@
-import { EditOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -44,6 +49,8 @@ type ProjectCDN = {
   id: number
   providerType: string
   cdnEndpoint: string
+  region?: string
+  credentialMasked?: string
   purgeScope: string
   isPrimary: boolean
 }
@@ -67,13 +74,19 @@ type EditProjectBucketInput = {
   providerType: ProviderType
   bucketName: string
   region: string
-  credential: string
+  accessKeyId: string
+  accessKeySecret: string
+  securityToken?: string
   isPrimary: boolean
 }
 
 type EditProjectCDNInput = {
   providerType: ProviderType
   cdnEndpoint: string
+  region: string
+  accessKeyId: string
+  accessKeySecret: string
+  securityToken?: string
   purgeScope: PurgeScope
   isPrimary: boolean
 }
@@ -136,6 +149,7 @@ export function ProjectsPage() {
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [editVisible, setEditVisible] = useState(false)
+  const [projectModalMode, setProjectModalMode] = useState<'create' | 'edit'>('edit')
 
   const fetchProjects = async (name?: string) => {
     setLoadingList(true)
@@ -194,6 +208,7 @@ export function ProjectsPage() {
       return
     }
 
+    setProjectModalMode('edit')
     form.setFieldsValue({
       name: selectedProject.name,
       description: selectedProject.description,
@@ -202,13 +217,19 @@ export function ProjectsPage() {
           providerType: bucket.providerType as ProviderType,
           bucketName: bucket.bucketName,
           region: bucket.region,
-          credential: '',
+          accessKeyId: '',
+          accessKeySecret: '',
+          securityToken: '',
           isPrimary: bucket.isPrimary,
         })) ?? [],
       cdns:
         selectedProject.cdns?.map((cdn) => ({
           providerType: cdn.providerType as ProviderType,
           cdnEndpoint: cdn.cdnEndpoint,
+          region: cdn.region || '',
+          accessKeyId: '',
+          accessKeySecret: '',
+          securityToken: '',
           purgeScope: (cdn.purgeScope || 'url') as PurgeScope,
           isPrimary: cdn.isPrimary,
         })) ?? [],
@@ -216,8 +237,26 @@ export function ProjectsPage() {
     setEditVisible(true)
   }
 
-  const submitEdit = async () => {
-    if (!selectedProjectId || !canWrite) {
+  const openCreateModal = () => {
+    if (!canWrite) {
+      return
+    }
+
+    setProjectModalMode('create')
+    form.setFieldsValue({
+      name: '',
+      description: '',
+      buckets: [],
+      cdns: [],
+    })
+    setEditVisible(true)
+  }
+
+  const submitProject = async () => {
+    if (!canWrite) {
+      return
+    }
+    if (projectModalMode === 'edit' && !selectedProjectId) {
       return
     }
 
@@ -236,13 +275,35 @@ export function ProjectsPage() {
 
     setSubmitting(true)
     try {
+      if (projectModalMode === 'create') {
+        const response = await apiClient.post<ApiResponse<Project>>('/projects', values)
+        const createdProject = response.data.data
+        messageApi.success('项目已创建。')
+        setEditVisible(false)
+        await fetchProjects(queryName.trim() || undefined)
+        if (createdProject?.id) {
+          setSelectedProjectId(createdProject.id)
+          await fetchProjectDetail(createdProject.id)
+        }
+        return
+      }
+
       await apiClient.put<ApiResponse<Project>>(`/projects/${selectedProjectId}`, values)
       messageApi.success('项目配置已更新。')
       setEditVisible(false)
       await fetchProjects(queryName.trim() || undefined)
-      await fetchProjectDetail(selectedProjectId)
+      if (selectedProjectId) {
+        await fetchProjectDetail(selectedProjectId)
+      }
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '项目更新失败，请检查输入后重试。'))
+      messageApi.error(
+        resolveErrorMessage(
+          error,
+          projectModalMode === 'create'
+            ? '项目创建失败，请检查输入后重试。'
+            : '项目更新失败，请检查输入后重试。',
+        ),
+      )
     } finally {
       setSubmitting(false)
     }
@@ -295,6 +356,14 @@ export function ProjectsPage() {
                 onClick={() => void fetchProjects(queryName.trim() || undefined)}
               >
                 刷新
+              </Button>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={openCreateModal}
+                disabled={!canWrite}
+              >
+                新建项目
               </Button>
             </Space>
           }
@@ -419,6 +488,12 @@ export function ProjectsPage() {
                               <Typography.Text type="secondary">
                                 PurgeScope: {cdn.purgeScope || 'url'}
                               </Typography.Text>
+                              <Typography.Text type="secondary">
+                                Region: {cdn.region || '-'}
+                              </Typography.Text>
+                              <Typography.Text type="secondary">
+                                Credential: {cdn.credentialMasked || '-'}
+                              </Typography.Text>
                             </Space>
                           </List.Item>
                         )}
@@ -435,10 +510,10 @@ export function ProjectsPage() {
       </Space>
 
       <Modal
-        title="编辑项目配置"
+        title={projectModalMode === 'create' ? '新建项目' : '编辑项目配置'}
         open={editVisible}
         onCancel={() => setEditVisible(false)}
-        onOk={() => void submitEdit()}
+        onOk={() => void submitProject()}
         okButtonProps={{ loading: submitting, disabled: !canWrite }}
         width={900}
         destroyOnHidden
@@ -447,7 +522,11 @@ export function ProjectsPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="后端更新接口要求每个存储桶提供有效凭证，本次编辑请重新填写每个存储桶的 Credential。"
+          message={
+            projectModalMode === 'create'
+              ? '项目可先空配置创建；可按需绑定 0~2 个存储桶与 0~2 个 CDN，并在每类存在绑定时仅设置一个 Primary。'
+              : '后端更新接口要求每个存储桶提供有效凭证，本次编辑请重新填写每个存储桶的 Credential。'
+          }
         />
         <Form<EditProjectFormValues> form={form} layout="vertical">
           <Form.Item
@@ -461,28 +540,55 @@ export function ProjectsPage() {
             <Input.TextArea rows={3} />
           </Form.Item>
 
-          <Divider>存储桶绑定（1~2）</Divider>
+          <Divider>存储桶绑定（0~2）</Divider>
           <Form.List name="buckets">
-            {(fields) => (
+            {(fields, { add, remove }) => (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    add({
+                      providerType: 'aliyun',
+                      bucketName: '',
+                      region: '',
+                      accessKeyId: '',
+                      accessKeySecret: '',
+                      securityToken: '',
+                      isPrimary: fields.length === 0,
+                    })
+                  }
+                  disabled={fields.length >= 2}
+                >
+                  添加存储桶绑定
+                </Button>
                 {fields.map((field, index) => (
                   <Card
                     key={field.key}
                     size="small"
                     title={`Bucket #${index + 1}`}
                     extra={
-                      <Form.Item
-                        noStyle
-                        name={[field.name, 'isPrimary']}
-                        valuePropName="checked"
-                        initialValue={index === 0}
-                      >
-                        <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
-                      </Form.Item>
+                      <Space size={8}>
+                        <Form.Item
+                          noStyle
+                          name={[field.name, 'isPrimary']}
+                          valuePropName="checked"
+                          initialValue={index === 0}
+                        >
+                          <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
+                        </Form.Item>
+                        <Button
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => remove(field.name)}
+                          size="small"
+                        >
+                          删除
+                        </Button>
+                      </Space>
                     }
                   >
                     <Row gutter={12}>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item
                           label="Provider"
                           name={[field.name, 'providerType']}
@@ -491,7 +597,7 @@ export function ProjectsPage() {
                           <Select options={providerOptions} />
                         </Form.Item>
                       </Col>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item
                           label="BucketName"
                           name={[field.name, 'bucketName']}
@@ -500,47 +606,107 @@ export function ProjectsPage() {
                           <Input />
                         </Form.Item>
                       </Col>
-                      <Col span={8}>
-                        <Form.Item label="Region" name={[field.name, 'region']}>
+                      <Col span={6}>
+                        <Form.Item
+                          label="Region"
+                          name={[field.name, 'region']}
+                          rules={[{ required: true, message: '请输入 Region' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={6}>
+                        <Form.Item
+                          label="SecurityToken"
+                          name={[field.name, 'securityToken']}
+                        >
                           <Input />
                         </Form.Item>
                       </Col>
                     </Row>
-                    <Form.Item
-                      label="Credential"
-                      name={[field.name, 'credential']}
-                      rules={[{ required: true, message: '请填写 Credential（必填）' }]}
-                    >
-                      <Input.Password placeholder="请输入可用凭证（更新接口要求）" />
-                    </Form.Item>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Form.Item
+                          label="AccessKeyId"
+                          name={[field.name, 'accessKeyId']}
+                          rules={[{ required: true, message: '请输入 AccessKeyId' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item
+                          label="AccessKeySecret"
+                          name={[field.name, 'accessKeySecret']}
+                          rules={[{ required: true, message: '请输入 AccessKeySecret' }]}
+                        >
+                          <Input.Password />
+                        </Form.Item>
+                      </Col>
+                    </Row>
                   </Card>
                 ))}
+                {fields.length === 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="当前未绑定存储桶。可以先创建项目，后续再补充绑定。"
+                  />
+                ) : null}
               </Space>
             )}
           </Form.List>
 
-          <Divider>CDN 绑定（1~2）</Divider>
+          <Divider>CDN 绑定（0~2）</Divider>
           <Form.List name="cdns">
-            {(fields) => (
+            {(fields, { add, remove }) => (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    add({
+                      providerType: 'aliyun',
+                      cdnEndpoint: '',
+                      region: '',
+                      accessKeyId: '',
+                      accessKeySecret: '',
+                      securityToken: '',
+                      purgeScope: 'url',
+                      isPrimary: fields.length === 0,
+                    })
+                  }
+                  disabled={fields.length >= 2}
+                >
+                  添加 CDN 绑定
+                </Button>
                 {fields.map((field, index) => (
                   <Card
                     key={field.key}
                     size="small"
                     title={`CDN #${index + 1}`}
                     extra={
-                      <Form.Item
-                        noStyle
-                        name={[field.name, 'isPrimary']}
-                        valuePropName="checked"
-                        initialValue={index === 0}
-                      >
-                        <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
-                      </Form.Item>
+                      <Space size={8}>
+                        <Form.Item
+                          noStyle
+                          name={[field.name, 'isPrimary']}
+                          valuePropName="checked"
+                          initialValue={index === 0}
+                        >
+                          <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
+                        </Form.Item>
+                        <Button
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => remove(field.name)}
+                          size="small"
+                        >
+                          删除
+                        </Button>
+                      </Space>
                     }
                   >
                     <Row gutter={12}>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item
                           label="Provider"
                           name={[field.name, 'providerType']}
@@ -549,11 +715,20 @@ export function ProjectsPage() {
                           <Select options={providerOptions} />
                         </Form.Item>
                       </Col>
-                      <Col span={10}>
+                      <Col span={8}>
                         <Form.Item
                           label="CDN Endpoint"
                           name={[field.name, 'cdnEndpoint']}
                           rules={[{ required: true, message: '请输入 CDN Endpoint' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={4}>
+                        <Form.Item
+                          label="Region"
+                          name={[field.name, 'region']}
+                          rules={[{ required: true, message: '请输入 Region' }]}
                         >
                           <Input />
                         </Form.Item>
@@ -569,8 +744,43 @@ export function ProjectsPage() {
                         </Form.Item>
                       </Col>
                     </Row>
+                    <Row gutter={12}>
+                      <Col span={8}>
+                        <Form.Item
+                          label="AccessKeyId"
+                          name={[field.name, 'accessKeyId']}
+                          rules={[{ required: true, message: '请输入 AccessKeyId' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item
+                          label="AccessKeySecret"
+                          name={[field.name, 'accessKeySecret']}
+                          rules={[{ required: true, message: '请输入 AccessKeySecret' }]}
+                        >
+                          <Input.Password />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item
+                          label="SecurityToken"
+                          name={[field.name, 'securityToken']}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                    </Row>
                   </Card>
                 ))}
+                {fields.length === 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="当前未绑定 CDN。可以先创建项目，后续再补充绑定。"
+                  />
+                ) : null}
               </Space>
             )}
           </Form.List>

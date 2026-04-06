@@ -15,6 +15,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Table,
   Tag,
@@ -57,6 +58,18 @@ type ApiResponse<T> = {
   data: T
 }
 
+type ProjectOption = {
+  id: number
+  name: string
+}
+
+type ProjectDetail = {
+  id: number
+  buckets?: Array<{
+    bucketName: string
+  }>
+}
+
 type QueryFormValues = {
   projectId: string
   bucketName: string
@@ -88,6 +101,10 @@ export function StoragePage() {
   const [auditVisible, setAuditVisible] = useState(false)
   const [auditLogs, setAuditLogs] = useState<StorageAuditLog[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
+  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([])
+  const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
+  const [bucketOptions, setBucketOptions] = useState<string[]>([])
+  const [bucketOptionsLoading, setBucketOptionsLoading] = useState(false)
 
   const getQuery = () => {
     const values = queryForm.getFieldsValue()
@@ -125,6 +142,48 @@ export function StoragePage() {
       setObjects([])
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadProjectOptions = async () => {
+    setProjectOptionsLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects')
+      const items = Array.isArray(response.data.data) ? response.data.data : []
+      setProjectOptions(items)
+    } catch (error) {
+      messageApi.error(resolveAPIErrorMessage(error, '项目列表加载失败。'))
+      setProjectOptions([])
+    } finally {
+      setProjectOptionsLoading(false)
+    }
+  }
+
+  const loadBucketsByProject = async (projectID: number) => {
+    if (!Number.isFinite(projectID) || projectID <= 0) {
+      setBucketOptions([])
+      queryForm.setFieldValue('bucketName', '')
+      return
+    }
+
+    setBucketOptionsLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<ProjectDetail>>(`/projects/${projectID}`)
+      const project = response.data.data
+      const names =
+        Array.isArray(project?.buckets)
+          ? project.buckets
+              .map((bucket) => bucket.bucketName?.trim())
+              .filter((name): name is string => Boolean(name))
+          : []
+      setBucketOptions(names)
+      queryForm.setFieldValue('bucketName', names[0] ?? '')
+    } catch (error) {
+      messageApi.error(resolveAPIErrorMessage(error, '项目存储桶加载失败。'))
+      setBucketOptions([])
+      queryForm.setFieldValue('bucketName', '')
+    } finally {
+      setBucketOptionsLoading(false)
     }
   }
 
@@ -362,14 +421,51 @@ export function StoragePage() {
               label="Project ID"
               rules={[{ required: true, message: '请输入 Project ID' }]}
             >
-              <Input placeholder="例如 1" style={{ width: 120 }} />
+              <Select
+                showSearch
+                placeholder="请选择或搜索 Project ID"
+                style={{ width: 280 }}
+                loading={projectOptionsLoading}
+                filterOption={(input, option) =>
+                  String(option?.label ?? '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+                options={projectOptions.map((project) => ({
+                  value: String(project.id),
+                  label: `${project.id} - ${project.name}`,
+                }))}
+                onDropdownVisibleChange={(open) => {
+                  if (open && projectOptions.length === 0) {
+                    void loadProjectOptions()
+                  }
+                }}
+                onChange={(value) => {
+                  void loadBucketsByProject(Number(value))
+                }}
+              />
             </Form.Item>
             <Form.Item
               name="bucketName"
               label="Bucket"
               rules={[{ required: true, message: '请输入 BucketName' }]}
             >
-              <Input placeholder="bucket-name" style={{ width: 220 }} />
+              <Select
+                showSearch
+                placeholder="请选择 Bucket（选项目后自动加载）"
+                style={{ width: 280 }}
+                loading={bucketOptionsLoading}
+                options={bucketOptions.map((bucketName) => ({
+                  value: bucketName,
+                  label: bucketName,
+                }))}
+                notFoundContent="该项目暂无存储桶绑定"
+                filterOption={(input, option) =>
+                  String(option?.label ?? '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+              />
             </Form.Item>
             <Form.Item name="prefix" label="Prefix">
               <Input placeholder="可选目录前缀" style={{ width: 220 }} />

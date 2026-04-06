@@ -95,7 +95,7 @@ func TestServiceCreateRejectsOutOfRangeBindingCounts(t *testing.T) {
 				{ProviderType: "aliyun", BucketName: "bucket-c-" + suffix, Region: "cn-hangzhou", CredentialCiphertext: "cipher-c", IsPrimary: false},
 			},
 			CDNs: []ProjectCDNInput{
-				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-a-" + suffix + ".example.com", PurgeScope: "url", IsPrimary: true},
+				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-a-" + suffix + ".example.com", Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`, PurgeScope: "url", IsPrimary: true},
 			},
 		})
 		require.Error(t, err)
@@ -114,9 +114,9 @@ func TestServiceCreateRejectsOutOfRangeBindingCounts(t *testing.T) {
 				{ProviderType: "aliyun", BucketName: "bucket-main-" + suffix, Region: "cn-hangzhou", CredentialCiphertext: "cipher-main", IsPrimary: true},
 			},
 			CDNs: []ProjectCDNInput{
-				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-1-" + suffix + ".example.com", PurgeScope: "url", IsPrimary: true},
-				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-2-" + suffix + ".example.com", PurgeScope: "url", IsPrimary: false},
-				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-3-" + suffix + ".example.com", PurgeScope: "url", IsPrimary: false},
+				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-1-" + suffix + ".example.com", Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`, PurgeScope: "url", IsPrimary: true},
+				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-2-" + suffix + ".example.com", Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`, PurgeScope: "url", IsPrimary: false},
+				{ProviderType: "aliyun", CDNEndpoint: "https://cdn-3-" + suffix + ".example.com", Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`, PurgeScope: "url", IsPrimary: false},
 			},
 		})
 		require.Error(t, err)
@@ -152,6 +152,7 @@ func TestServiceCreateEncryptsCredentialAndGetByIDReturnsMaskedCredential(t *tes
 			{
 				ProviderType: "aliyun",
 				CDNEndpoint:  "https://cdn-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 				PurgeScope:   "url",
 				IsPrimary:    true,
 			},
@@ -272,6 +273,7 @@ func TestServiceListBucketObjectsUsesProviderBoundary(t *testing.T) {
 			{
 				ProviderType: "aliyun",
 				CDNEndpoint:  "https://cdn-list-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 				PurgeScope:   "url",
 				IsPrimary:    true,
 			},
@@ -314,6 +316,7 @@ func TestServiceUploadBucketObjectUsesProviderBoundary(t *testing.T) {
 		CDNs: []ProjectCDNInput{{
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-upload-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 			PurgeScope:   "url",
 			IsPrimary:    true,
 		}},
@@ -354,6 +357,7 @@ func TestServiceDeleteBucketObjectUsesProviderBoundary(t *testing.T) {
 		CDNs: []ProjectCDNInput{{
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-delete-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 			PurgeScope:   "url",
 			IsPrimary:    true,
 		}},
@@ -388,6 +392,7 @@ func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
 		CDNs: []ProjectCDNInput{{
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-rename-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 			PurgeScope:   "url",
 			IsPrimary:    true,
 		}},
@@ -433,6 +438,7 @@ func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
 		CDNs: []ProjectCDNInput{{
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-url-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 			PurgeScope:   "url",
 			IsPrimary:    true,
 		}},
@@ -478,6 +484,7 @@ func TestServiceRefreshDirectoriesUsesProviderBoundary(t *testing.T) {
 		CDNs: []ProjectCDNInput{{
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-directory-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 			PurgeScope:   "directory",
 			IsPrimary:    true,
 		}},
@@ -527,6 +534,7 @@ func TestServiceSyncResourcesMapsProviderErrors(t *testing.T) {
 		CDNs: []ProjectCDNInput{{
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-sync-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
 			PurgeScope:   "url",
 			IsPrimary:    true,
 		}},
