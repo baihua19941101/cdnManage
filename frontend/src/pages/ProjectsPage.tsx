@@ -1,4 +1,4 @@
-import { EditOutlined, ReloadOutlined } from '@ant-design/icons'
+import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -136,6 +136,7 @@ export function ProjectsPage() {
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [editVisible, setEditVisible] = useState(false)
+  const [projectModalMode, setProjectModalMode] = useState<'create' | 'edit'>('edit')
 
   const fetchProjects = async (name?: string) => {
     setLoadingList(true)
@@ -194,6 +195,7 @@ export function ProjectsPage() {
       return
     }
 
+    setProjectModalMode('edit')
     form.setFieldsValue({
       name: selectedProject.name,
       description: selectedProject.description,
@@ -216,8 +218,41 @@ export function ProjectsPage() {
     setEditVisible(true)
   }
 
-  const submitEdit = async () => {
-    if (!selectedProjectId || !canWrite) {
+  const openCreateModal = () => {
+    if (!canWrite) {
+      return
+    }
+
+    setProjectModalMode('create')
+    form.setFieldsValue({
+      name: '',
+      description: '',
+      buckets: [
+        {
+          providerType: 'aliyun',
+          bucketName: '',
+          region: '',
+          credential: '',
+          isPrimary: true,
+        },
+      ],
+      cdns: [
+        {
+          providerType: 'aliyun',
+          cdnEndpoint: '',
+          purgeScope: 'url',
+          isPrimary: true,
+        },
+      ],
+    })
+    setEditVisible(true)
+  }
+
+  const submitProject = async () => {
+    if (!canWrite) {
+      return
+    }
+    if (projectModalMode === 'edit' && !selectedProjectId) {
       return
     }
 
@@ -236,13 +271,35 @@ export function ProjectsPage() {
 
     setSubmitting(true)
     try {
+      if (projectModalMode === 'create') {
+        const response = await apiClient.post<ApiResponse<Project>>('/projects', values)
+        const createdProject = response.data.data
+        messageApi.success('项目已创建。')
+        setEditVisible(false)
+        await fetchProjects(queryName.trim() || undefined)
+        if (createdProject?.id) {
+          setSelectedProjectId(createdProject.id)
+          await fetchProjectDetail(createdProject.id)
+        }
+        return
+      }
+
       await apiClient.put<ApiResponse<Project>>(`/projects/${selectedProjectId}`, values)
       messageApi.success('项目配置已更新。')
       setEditVisible(false)
       await fetchProjects(queryName.trim() || undefined)
-      await fetchProjectDetail(selectedProjectId)
+      if (selectedProjectId) {
+        await fetchProjectDetail(selectedProjectId)
+      }
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '项目更新失败，请检查输入后重试。'))
+      messageApi.error(
+        resolveErrorMessage(
+          error,
+          projectModalMode === 'create'
+            ? '项目创建失败，请检查输入后重试。'
+            : '项目更新失败，请检查输入后重试。',
+        ),
+      )
     } finally {
       setSubmitting(false)
     }
@@ -295,6 +352,14 @@ export function ProjectsPage() {
                 onClick={() => void fetchProjects(queryName.trim() || undefined)}
               >
                 刷新
+              </Button>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={openCreateModal}
+                disabled={!canWrite}
+              >
+                新建项目
               </Button>
             </Space>
           }
@@ -435,10 +500,10 @@ export function ProjectsPage() {
       </Space>
 
       <Modal
-        title="编辑项目配置"
+        title={projectModalMode === 'create' ? '新建项目' : '编辑项目配置'}
         open={editVisible}
         onCancel={() => setEditVisible(false)}
-        onOk={() => void submitEdit()}
+        onOk={() => void submitProject()}
         okButtonProps={{ loading: submitting, disabled: !canWrite }}
         width={900}
         destroyOnHidden
@@ -447,7 +512,11 @@ export function ProjectsPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="后端更新接口要求每个存储桶提供有效凭证，本次编辑请重新填写每个存储桶的 Credential。"
+          message={
+            projectModalMode === 'create'
+              ? '请至少配置 1 个存储桶与 1 个 CDN 绑定，并保证各自只有一个 Primary。'
+              : '后端更新接口要求每个存储桶提供有效凭证，本次编辑请重新填写每个存储桶的 Credential。'
+          }
         />
         <Form<EditProjectFormValues> form={form} layout="vertical">
           <Form.Item
