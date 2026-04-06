@@ -134,6 +134,7 @@ flowchart LR
 职责：
 
 - 用户创建、编辑、禁用、删除
+- 平台管理员重置用户密码
 - 项目角色绑定
 - 平台管理员与项目角色校验
 
@@ -143,6 +144,7 @@ flowchart LR
 - `POST /api/v1/users`
 - `PUT /api/v1/users/:id`
 - `DELETE /api/v1/users/:id`
+- `PUT /api/v1/users/:id/password`
 - `PUT /api/v1/users/:id/project-bindings`
 
 RBAC 规则：
@@ -244,6 +246,7 @@ type CDNProvider interface {
 
 - 登录成功与失败
 - 用户管理操作
+- 管理员重置用户密码操作
 - 项目管理操作
 - 存储桶文件操作
 - CDN 刷新操作
@@ -446,6 +449,8 @@ erDiagram
   - 访问未授权项目
 - `VALIDATION_ERROR`
   - 请求参数不合法
+- `PASSWORD_POLICY_VIOLATION`
+  - 新密码不满足密码策略要求
 - `PROVIDER_CONNECTION_FAILED`
   - 存储桶连接校验失败
 - `PROVIDER_OPERATION_FAILED`
@@ -485,6 +490,7 @@ erDiagram
 重点测试以下核心逻辑：
 
 - RBAC 判定与项目作用域校验
+- 管理员重置用户密码权限与密码策略校验
 - 项目绑定数量约束
 - 首次启动超级管理员初始化逻辑
 - Provider 抽象层的参数组装与错误映射
@@ -540,3 +546,4 @@ erDiagram
 - Requirement 7: 由 Frontend Architecture 与 Theme Strategy 覆盖
 - Requirement 8: 由 Security and Secret Management、RBAC 与错误处理规则覆盖
 - Requirement 9: 由分层架构、Provider 抽象、Redis 策略与数据模型拆分覆盖
+- Requirement 10: 由 User and RBAC Component 的管理员重置密码接口、审计写入与前端用户管理页面交互覆盖

@@ -9,6 +9,7 @@ import { ProjectsPage } from '../pages/ProjectsPage'
 import { ResourcePage } from '../pages/ResourcePage'
 import { SetupPage } from '../pages/SetupPage'
 import { UnauthorizedPage } from '../pages/UnauthorizedPage'
+import { UsersPage } from '../pages/UsersPage'
 import { useAuthStore } from '../store/auth'
 
 export function AppRouter() {
@@ -31,15 +32,7 @@ export function AppRouter() {
           >
             <Route index element={<DashboardPage />} />
             <Route path="projects" element={<ProjectsPage />} />
-            <Route
-              path="users"
-              element={
-                <ResourcePage
-                  title="Users"
-                  description="User management and project role bindings will land in task 11.2."
-                />
-              }
-            />
+            <Route path="users" element={<UsersPage />} />
             <Route
               path="storage"
               element={
