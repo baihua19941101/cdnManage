@@ -1,9 +1,15 @@
 package storage
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
+	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -72,10 +78,19 @@ type uploadObjectSummary struct {
 	Failure int `json:"failure"`
 }
 
+type uploadArchiveSummary struct {
+	ArchivesProcessed int `json:"archivesProcessed"`
+	Extracted         int `json:"extracted"`
+	Uploaded          int `json:"uploaded"`
+	Failed            int `json:"failed"`
+	Skipped           int `json:"skipped"`
+}
+
 type uploadObjectResponse struct {
-	Message string                   `json:"message"`
-	Summary uploadObjectSummary      `json:"summary"`
-	Results []uploadObjectItemResult `json:"results"`
+	Message        string                   `json:"message"`
+	Summary        uploadObjectSummary      `json:"summary"`
+	Results        []uploadObjectItemResult `json:"results"`
+	ArchiveSummary *uploadArchiveSummary    `json:"archiveSummary,omitempty"`
 }
 
 type auditLogResponse struct {
@@ -232,7 +247,8 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 
 	bucketName := ctx.PostForm("bucketName")
 	results := make([]uploadObjectItemResult, 0, len(fileHeaders))
-	successCount := 0
+	summary := uploadObjectSummary{}
+	var archiveSummary *uploadArchiveSummary
 
 	for _, fileHeader := range fileHeaders {
 		fileName := ""
@@ -240,9 +256,51 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			fileName = strings.TrimSpace(fileHeader.Filename)
 		}
 
+		if fileHeader == nil {
+			appendUploadResult(&results, &summary, uploadObjectItemResult{
+				FileName: fileName,
+				Result:   "failure",
+				Reason:   "file is required",
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, gin.H{
+				"error":    "file header is missing",
+				"fileName": fileName,
+			})
+			continue
+		}
+
+		if archiveFormat := detectArchiveFormat(fileHeader.Filename); archiveFormat != "" {
+			archiveSummary = ensureArchiveSummary(archiveSummary)
+			archiveSummary.ArchivesProcessed++
+
+			file, openErr := fileHeader.Open()
+			if openErr != nil {
+				appendUploadResult(&results, &summary, uploadObjectItemResult{
+					FileName: fileName,
+					Result:   "failure",
+					Reason:   "archive could not be opened",
+				})
+				archiveSummary.Failed++
+				h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, gin.H{
+					"error":    openErr.Error(),
+					"fileName": fileName,
+					"archive":  true,
+				})
+				continue
+			}
+
+			stats := h.uploadArchiveEntries(ctx, projectID, bucketName, fileHeader, file, resolveArchiveUploadBaseKey(key, keyPrefix, len(fileHeaders)), archiveFormat, &results, &summary)
+			archiveSummary.Extracted += stats.Extracted
+			archiveSummary.Uploaded += stats.Uploaded
+			archiveSummary.Failed += stats.Failed
+			archiveSummary.Skipped += stats.Skipped
+			_ = file.Close()
+			continue
+		}
+
 		targetKey, keyErr := resolveUploadObjectKey(fileHeader, key, keyPrefix, len(fileHeaders))
 		if keyErr != nil {
-			results = append(results, uploadObjectItemResult{
+			appendUploadResult(&results, &summary, uploadObjectItemResult{
 				FileName: fileName,
 				Key:      targetKey,
 				Result:   "failure",
@@ -254,23 +312,10 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			})
 			continue
 		}
-		if fileHeader == nil {
-			results = append(results, uploadObjectItemResult{
-				FileName: fileName,
-				Key:      targetKey,
-				Result:   "failure",
-				Reason:   "file is required",
-			})
-			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
-				"error":    "file header is missing",
-				"fileName": fileName,
-			})
-			continue
-		}
 
 		file, openErr := fileHeader.Open()
 		if openErr != nil {
-			results = append(results, uploadObjectItemResult{
+			appendUploadResult(&results, &summary, uploadObjectItemResult{
 				FileName: fileName,
 				Key:      targetKey,
 				Result:   "failure",
@@ -293,7 +338,7 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		})
 		_ = file.Close()
 		if uploadErr != nil {
-			results = append(results, uploadObjectItemResult{
+			appendUploadResult(&results, &summary, uploadObjectItemResult{
 				FileName: fileName,
 				Key:      targetKey,
 				Result:   "failure",
@@ -307,8 +352,7 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			continue
 		}
 
-		successCount++
-		results = append(results, uploadObjectItemResult{
+		appendUploadResult(&results, &summary, uploadObjectItemResult{
 			FileName: fileName,
 			Key:      targetKey,
 			Result:   "success",
@@ -319,15 +363,16 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		})
 	}
 
-	httpresp.Success(ctx, uploadObjectResponse{
+	response := uploadObjectResponse{
 		Message: "upload accepted",
-		Summary: uploadObjectSummary{
-			Total:   len(fileHeaders),
-			Success: successCount,
-			Failure: len(fileHeaders) - successCount,
-		},
+		Summary: summary,
 		Results: results,
-	})
+	}
+	if archiveSummary != nil {
+		response.ArchiveSummary = archiveSummary
+	}
+
+	httpresp.Success(ctx, response)
 }
 
 func (h *Handler) DownloadObject(ctx *gin.Context) {
@@ -569,6 +614,323 @@ func uploadAuditTarget(key, fileName string) string {
 		return fileName
 	}
 	return "upload"
+}
+
+func appendUploadResult(results *[]uploadObjectItemResult, summary *uploadObjectSummary, item uploadObjectItemResult) {
+	if results != nil {
+		*results = append(*results, item)
+	}
+	if summary == nil {
+		return
+	}
+
+	switch strings.ToLower(strings.TrimSpace(item.Result)) {
+	case "success":
+		summary.Total++
+		summary.Success++
+	case "failure":
+		summary.Total++
+		summary.Failure++
+	}
+}
+
+func detectArchiveFormat(fileName string) string {
+	lowerName := strings.ToLower(strings.TrimSpace(fileName))
+	switch {
+	case strings.HasSuffix(lowerName, ".tar.gz"), strings.HasSuffix(lowerName, ".tgz"):
+		return "tar.gz"
+	case strings.HasSuffix(lowerName, ".tar"):
+		return "tar"
+	case strings.HasSuffix(lowerName, ".zip"):
+		return "zip"
+	default:
+		return ""
+	}
+}
+
+func resolveArchiveUploadBaseKey(key, keyPrefix string, fileCount int) string {
+	if fileCount == 1 && strings.TrimSpace(key) != "" {
+		return strings.TrimSpace(key)
+	}
+	return strings.TrimSpace(keyPrefix)
+}
+
+func ensureArchiveSummary(summary *uploadArchiveSummary) *uploadArchiveSummary {
+	if summary != nil {
+		return summary
+	}
+	return &uploadArchiveSummary{}
+}
+
+func (h *Handler) uploadArchiveEntries(
+	ctx *gin.Context,
+	projectID uint64,
+	bucketName string,
+	fileHeader *multipart.FileHeader,
+	file multipart.File,
+	baseKey string,
+	archiveFormat string,
+	results *[]uploadObjectItemResult,
+	summary *uploadObjectSummary,
+) uploadArchiveSummary {
+	switch archiveFormat {
+	case "zip":
+		return h.uploadZipEntries(ctx, projectID, bucketName, fileHeader, file, baseKey, results, summary)
+	case "tar":
+		return h.uploadTarEntries(ctx, projectID, bucketName, fileHeader.Filename, tar.NewReader(file), baseKey, results, summary)
+	case "tar.gz":
+		gzipReader, err := gzip.NewReader(file)
+		if err != nil {
+			return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive could not be decompressed", err, results, summary)
+		}
+		defer gzipReader.Close()
+
+		return h.uploadTarEntries(ctx, projectID, bucketName, fileHeader.Filename, tar.NewReader(gzipReader), baseKey, results, summary)
+	default:
+		return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive format is not supported", nil, results, summary)
+	}
+}
+
+func (h *Handler) uploadZipEntries(
+	ctx *gin.Context,
+	projectID uint64,
+	bucketName string,
+	fileHeader *multipart.FileHeader,
+	file multipart.File,
+	baseKey string,
+	results *[]uploadObjectItemResult,
+	summary *uploadObjectSummary,
+) uploadArchiveSummary {
+	reader, err := zip.NewReader(file, fileHeader.Size)
+	if err != nil {
+		return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive could not be decompressed", err, results, summary)
+	}
+
+	stats := uploadArchiveSummary{}
+	for _, entry := range reader.File {
+		rawName := strings.TrimSpace(entry.Name)
+		if entry.FileInfo().IsDir() {
+			stats.Skipped++
+			continue
+		}
+		if !entry.FileInfo().Mode().IsRegular() {
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry type is not supported", nil, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		stats.Extracted++
+		entryPath, sanitizeErr := sanitizeArchiveEntryPath(rawName)
+		if sanitizeErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", sanitizeErr.Error(), nil, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		entryReader, openErr := entry.Open()
+		if openErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry could not be opened", openErr, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		targetKey := joinObjectKey(baseKey, entryPath)
+		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
+			BucketName:  bucketName,
+			Key:         targetKey,
+			ContentType: archiveEntryContentType(entryPath),
+			Content:     entryReader,
+			Size:        int64(entry.UncompressedSize64),
+		})
+		_ = entryReader.Close()
+		if uploadErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, targetKey, uploadErr.Error(), nil, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		appendUploadResult(results, summary, uploadObjectItemResult{
+			FileName: archiveResultFileName(fileHeader.Filename, entryPath),
+			Key:      targetKey,
+			Result:   "success",
+		})
+		stats.Uploaded++
+		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, archiveResultFileName(fileHeader.Filename, entryPath)), model.AuditResultSuccess, gin.H{
+			"size":        int64(entry.UncompressedSize64),
+			"fileName":    entryPath,
+			"archiveFile": strings.TrimSpace(fileHeader.Filename),
+		})
+	}
+
+	return stats
+}
+
+func (h *Handler) uploadTarEntries(
+	ctx *gin.Context,
+	projectID uint64,
+	bucketName string,
+	archiveName string,
+	reader *tar.Reader,
+	baseKey string,
+	results *[]uploadObjectItemResult,
+	summary *uploadObjectSummary,
+) uploadArchiveSummary {
+	stats := uploadArchiveSummary{}
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			return stats
+		}
+		if err != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, "", "", "archive could not be decompressed", err, results, summary)
+			stats.Failed += failure.Failed
+			return stats
+		}
+
+		rawName := strings.TrimSpace(header.Name)
+		if header.FileInfo().IsDir() {
+			stats.Skipped++
+			continue
+		}
+		if !header.FileInfo().Mode().IsRegular() {
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", "archive entry type is not supported", nil, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		stats.Extracted++
+		entryPath, sanitizeErr := sanitizeArchiveEntryPath(rawName)
+		if sanitizeErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", sanitizeErr.Error(), nil, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		targetKey := joinObjectKey(baseKey, entryPath)
+		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
+			BucketName:  bucketName,
+			Key:         targetKey,
+			ContentType: archiveEntryContentType(entryPath),
+			Content:     reader,
+			Size:        header.Size,
+		})
+		if uploadErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, targetKey, uploadErr.Error(), nil, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		appendUploadResult(results, summary, uploadObjectItemResult{
+			FileName: archiveResultFileName(archiveName, entryPath),
+			Key:      targetKey,
+			Result:   "success",
+		})
+		stats.Uploaded++
+		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, archiveResultFileName(archiveName, entryPath)), model.AuditResultSuccess, gin.H{
+			"size":        header.Size,
+			"fileName":    entryPath,
+			"archiveFile": strings.TrimSpace(archiveName),
+		})
+	}
+}
+
+func (h *Handler) recordArchiveFailure(
+	ctx *gin.Context,
+	projectID uint64,
+	archiveName string,
+	entryName string,
+	targetKey string,
+	reason string,
+	err error,
+	results *[]uploadObjectItemResult,
+	summary *uploadObjectSummary,
+) uploadArchiveSummary {
+	fileName := archiveResultFileName(archiveName, entryName)
+	appendUploadResult(results, summary, uploadObjectItemResult{
+		FileName: fileName,
+		Key:      strings.TrimSpace(targetKey),
+		Result:   "failure",
+		Reason:   reason,
+	})
+
+	metadata := gin.H{
+		"fileName": fileName,
+		"archive":  true,
+	}
+	if strings.TrimSpace(archiveName) != "" {
+		metadata["archiveFile"] = strings.TrimSpace(archiveName)
+	}
+	if strings.TrimSpace(entryName) != "" {
+		metadata["archiveEntry"] = strings.TrimSpace(entryName)
+	}
+	if err != nil {
+		metadata["error"] = err.Error()
+	} else {
+		metadata["error"] = reason
+	}
+
+	h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, metadata)
+	return uploadArchiveSummary{Failed: 1}
+}
+
+func sanitizeArchiveEntryPath(entryName string) (string, error) {
+	normalized := strings.TrimSpace(entryName)
+	if normalized == "" {
+		return "", uploadValidationError("archive entry path is empty", nil)
+	}
+
+	normalized = strings.ReplaceAll(normalized, "\\", "/")
+	if strings.Contains(normalized, "\x00") {
+		return "", uploadValidationError("archive entry path contains invalid characters", nil)
+	}
+	if hasWindowsDrivePrefix(normalized) {
+		return "", uploadValidationError("archive entry path must be relative", nil)
+	}
+	if path.IsAbs(normalized) {
+		return "", uploadValidationError("archive entry path must be relative", nil)
+	}
+
+	cleanPath := path.Clean(normalized)
+	switch {
+	case cleanPath == ".", cleanPath == "":
+		return "", uploadValidationError("archive entry path is empty", nil)
+	case cleanPath == "..", strings.HasPrefix(cleanPath, "../"):
+		return "", uploadValidationError("archive entry path must not escape the archive root", nil)
+	case path.IsAbs(cleanPath):
+		return "", uploadValidationError("archive entry path must be relative", nil)
+	}
+
+	return strings.TrimPrefix(cleanPath, "./"), nil
+}
+
+func hasWindowsDrivePrefix(value string) bool {
+	if len(value) < 2 || value[1] != ':' {
+		return false
+	}
+	first := value[0]
+	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+}
+
+func archiveEntryContentType(entryPath string) string {
+	contentType := strings.TrimSpace(mime.TypeByExtension(strings.ToLower(path.Ext(entryPath))))
+	if contentType == "" {
+		return "application/octet-stream"
+	}
+	return contentType
+}
+
+func archiveResultFileName(archiveName, entryName string) string {
+	archiveName = strings.TrimSpace(archiveName)
+	entryName = strings.TrimSpace(entryName)
+	switch {
+	case archiveName == "":
+		return entryName
+	case entryName == "":
+		return archiveName
+	default:
+		return archiveName + "!" + entryName
+	}
 }
 
 func uploadValidationError(message string, fields []uploadObjectFieldError) error {

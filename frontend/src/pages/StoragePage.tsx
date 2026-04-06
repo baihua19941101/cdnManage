@@ -85,8 +85,29 @@ type UploadSummary = {
   failureCount: number
 }
 
+type ArchiveSummary = {
+  archivesProcessed: number
+  extracted: number
+  uploaded: number
+  failed: number
+  skipped: number
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
+
+const toNonNegativeNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, value)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numericValue = Number(value)
+    if (Number.isFinite(numericValue)) {
+      return Math.max(0, numericValue)
+    }
+  }
+  return null
+}
 
 const parseUploadSummary = (data: unknown, fallbackTotal: number): UploadSummary => {
   if (isRecord(data)) {
@@ -150,6 +171,50 @@ const parseUploadSummary = (data: unknown, fallbackTotal: number): UploadSummary
     failureCount: 0,
   }
 }
+
+const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
+  if (!isRecord(data)) {
+    return null
+  }
+
+  const candidates: unknown[] = [data.archiveSummary, data.extractSummary, data]
+
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) {
+      continue
+    }
+
+    const archivesProcessed = toNonNegativeNumber(candidate.archivesProcessed)
+    const extracted = toNonNegativeNumber(candidate.extracted)
+    const uploaded = toNonNegativeNumber(candidate.uploaded)
+    const failed = toNonNegativeNumber(candidate.failed)
+    const skipped = toNonNegativeNumber(candidate.skipped)
+
+    const hasAnyArchiveField =
+      archivesProcessed !== null ||
+      extracted !== null ||
+      uploaded !== null ||
+      failed !== null ||
+      skipped !== null
+
+    if (!hasAnyArchiveField) {
+      continue
+    }
+
+    return {
+      archivesProcessed: archivesProcessed ?? 0,
+      extracted: extracted ?? 0,
+      uploaded: uploaded ?? 0,
+      failed: failed ?? 0,
+      skipped: skipped ?? 0,
+    }
+  }
+
+  return null
+}
+
+const formatArchiveSummary = (summary: ArchiveSummary): string =>
+  `解压与上传摘要：压缩包 ${summary.archivesProcessed}，解压 ${summary.extracted}，上传 ${summary.uploaded}，跳过 ${summary.skipped}，失败 ${summary.failed}`
 
 export function StoragePage() {
   const [messageApi, messageContext] = message.useMessage()
@@ -307,10 +372,14 @@ export function StoragePage() {
         },
       )
       const summary = parseUploadSummary(response.data?.data, files.length)
+      const archiveSummary = parseArchiveSummary(response.data?.data)
+      const archiveSummaryText = archiveSummary ? `；${formatArchiveSummary(archiveSummary)}` : ''
       if (summary.failureCount > 0) {
-        messageApi.warning(`上传完成：成功 ${summary.successCount}，失败 ${summary.failureCount}。`)
+        messageApi.warning(
+          `上传完成：成功 ${summary.successCount}，失败 ${summary.failureCount}${archiveSummaryText}。`,
+        )
       } else {
-        messageApi.success(`上传完成：成功 ${summary.successCount}，失败 0。`)
+        messageApi.success(`上传完成：成功 ${summary.successCount}，失败 0${archiveSummaryText}。`)
       }
       setPendingUploadFiles([])
       setUploadKey('')
@@ -643,6 +712,9 @@ export function StoragePage() {
               {pendingUploadFiles.length > 1 && uploadKey.trim()
                 ? '（将使用当前输入作为 keyPrefix）'
                 : ''}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              支持 zip/tar/tar.gz/tgz 自动解压上传。
             </Typography.Text>
           </Space>
         </Card>
