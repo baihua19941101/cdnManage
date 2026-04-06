@@ -33,6 +33,7 @@ func Load() (*config.AppConfig, error) {
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("decode config file %q: %w", configPath, err)
 	}
+	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}

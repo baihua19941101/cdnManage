@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/baihua19941101/cdnManage/internal/config"
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/model"
@@ -31,9 +33,11 @@ type projectScopeMiddleware interface {
 }
 
 type Handler struct {
-	projectService *serviceprojects.Service
-	audits         repository.AuditLogRepository
-	recorder       *auditservice.Recorder
+	projectService     *serviceprojects.Service
+	audits             repository.AuditLogRepository
+	recorder           *auditservice.Recorder
+	maxUploadSizeMB    int64
+	maxUploadSizeBytes int64
 }
 
 type validateConnectionRequest struct {
@@ -66,10 +70,14 @@ type uploadObjectFieldError struct {
 }
 
 type uploadObjectItemResult struct {
-	FileName string `json:"fileName"`
-	Key      string `json:"key,omitempty"`
-	Result   string `json:"result"`
-	Reason   string `json:"reason,omitempty"`
+	FileName   string `json:"fileName"`
+	Key        string `json:"key,omitempty"`
+	Result     string `json:"result"`
+	Reason     string `json:"reason,omitempty"`
+	ErrorCode  string `json:"errorCode,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	LimitBytes int64  `json:"limitBytes,omitempty"`
+	LimitMB    int64  `json:"limitMB,omitempty"`
 }
 
 type uploadObjectSummary struct {
@@ -110,21 +118,36 @@ type listAuditLogsResponse struct {
 	Logs []auditLogResponse `json:"logs"`
 }
 
+type uploadPolicyResponse struct {
+	MaxUploadSizeMB    int64 `json:"maxUploadSizeMB"`
+	MaxUploadSizeBytes int64 `json:"maxUploadSizeBytes"`
+}
+
 type renameObjectRequest struct {
 	BucketName string `json:"bucketName"`
 	SourceKey  string `json:"sourceKey" binding:"required"`
 	TargetKey  string `json:"targetKey" binding:"required"`
 }
 
-func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository) *Handler {
+func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64) *Handler {
+	if maxUploadSizeMB <= 0 {
+		maxUploadSizeMB = config.DefaultMaxUploadFileSizeMB
+	}
+
 	return &Handler{
-		projectService: projectService,
-		audits:         audits,
-		recorder:       auditservice.NewRecorder(audits),
+		projectService:     projectService,
+		audits:             audits,
+		recorder:           auditservice.NewRecorder(audits),
+		maxUploadSizeMB:    maxUploadSizeMB,
+		maxUploadSizeBytes: (config.UploadConfig{MaxFileSizeMB: maxUploadSizeMB}).MaxFileSizeBytes(),
 	}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
+	authenticatedGroup := router.Group("/api/v1/storage")
+	authenticatedGroup.Use(middleware.Authentication(authenticator))
+	authenticatedGroup.GET("/upload-policy", handler.GetUploadPolicy)
+
 	adminGroup := router.Group("/api/v1/storage")
 	adminGroup.Use(middleware.Authentication(authenticator))
 	adminGroup.Use(middleware.RequirePlatformAdmin())
@@ -141,6 +164,13 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	projectGroup.POST("/upload", middleware.RequireProjectWrite(), handler.UploadObject)
 	projectGroup.DELETE("/objects", middleware.RequireProjectWrite(), handler.DeleteObject)
 	projectGroup.PUT("/rename", middleware.RequireProjectWrite(), handler.RenameObject)
+}
+
+func (h *Handler) GetUploadPolicy(ctx *gin.Context) {
+	httpresp.Success(ctx, uploadPolicyResponse{
+		MaxUploadSizeMB:    h.maxUploadSizeMB,
+		MaxUploadSizeBytes: h.maxUploadSizeBytes,
+	})
 }
 
 func (h *Handler) ValidateConnection(ctx *gin.Context) {
@@ -310,6 +340,11 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 				"error":    keyErr.Error(),
 				"fileName": fileName,
 			})
+			continue
+		}
+		if h.isUploadSizeExceeded(fileHeader.Size) {
+			h.recordUploadTooLarge(ctx, projectID, fileName, targetKey, fileHeader.Size, "", "")
+			appendUploadResult(&results, &summary, h.uploadTooLargeResult(fileName, targetKey, fileHeader.Size))
 			continue
 		}
 
@@ -735,12 +770,21 @@ func (h *Handler) uploadZipEntries(
 		}
 
 		targetKey := joinObjectKey(baseKey, entryPath)
+		entrySize := int64(entry.UncompressedSize64)
+		if h.isUploadSizeExceeded(entrySize) {
+			_ = entryReader.Close()
+			appendUploadResult(results, summary, h.uploadTooLargeResult(archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize))
+			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize, fileHeader.Filename, rawName)
+			stats.Failed++
+			continue
+		}
+
 		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
 			BucketName:  bucketName,
 			Key:         targetKey,
 			ContentType: archiveEntryContentType(entryPath),
 			Content:     entryReader,
-			Size:        int64(entry.UncompressedSize64),
+			Size:        entrySize,
 		})
 		_ = entryReader.Close()
 		if uploadErr != nil {
@@ -808,6 +852,13 @@ func (h *Handler) uploadTarEntries(
 		}
 
 		targetKey := joinObjectKey(baseKey, entryPath)
+		if h.isUploadSizeExceeded(header.Size) {
+			appendUploadResult(results, summary, h.uploadTooLargeResult(archiveResultFileName(archiveName, entryPath), targetKey, header.Size))
+			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(archiveName, entryPath), targetKey, header.Size, archiveName, rawName)
+			stats.Failed++
+			continue
+		}
+
 		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
 			BucketName:  bucketName,
 			Key:         targetKey,
@@ -931,6 +982,43 @@ func archiveResultFileName(archiveName, entryName string) string {
 	default:
 		return archiveName + "!" + entryName
 	}
+}
+
+func (h *Handler) isUploadSizeExceeded(size int64) bool {
+	return h != nil && size > 0 && h.maxUploadSizeBytes > 0 && size > h.maxUploadSizeBytes
+}
+
+func (h *Handler) uploadTooLargeResult(fileName, targetKey string, size int64) uploadObjectItemResult {
+	return uploadObjectItemResult{
+		FileName:   strings.TrimSpace(fileName),
+		Key:        strings.TrimSpace(targetKey),
+		Result:     "failure",
+		Reason:     fmt.Sprintf("file size exceeds limit of %d MB", h.maxUploadSizeMB),
+		ErrorCode:  "upload_file_too_large",
+		Size:       size,
+		LimitBytes: h.maxUploadSizeBytes,
+		LimitMB:    h.maxUploadSizeMB,
+	}
+}
+
+func (h *Handler) recordUploadTooLarge(ctx *gin.Context, projectID uint64, fileName, targetKey string, size int64, archiveName, entryName string) {
+	metadata := gin.H{
+		"error":     "file size exceeds upload limit",
+		"errorCode": "upload_file_too_large",
+		"fileName":  strings.TrimSpace(fileName),
+		"size":      size,
+		"limit":     h.maxUploadSizeBytes,
+		"limitMB":   h.maxUploadSizeMB,
+	}
+	if strings.TrimSpace(archiveName) != "" {
+		metadata["archive"] = true
+		metadata["archiveFile"] = strings.TrimSpace(archiveName)
+	}
+	if strings.TrimSpace(entryName) != "" {
+		metadata["archiveEntry"] = strings.TrimSpace(entryName)
+	}
+
+	h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, metadata)
 }
 
 func uploadValidationError(message string, fields []uploadObjectFieldError) error {
