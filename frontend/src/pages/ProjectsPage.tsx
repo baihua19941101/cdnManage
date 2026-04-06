@@ -49,6 +49,8 @@ type ProjectCDN = {
   id: number
   providerType: string
   cdnEndpoint: string
+  region?: string
+  credentialMasked?: string
   purgeScope: string
   isPrimary: boolean
 }
@@ -72,13 +74,19 @@ type EditProjectBucketInput = {
   providerType: ProviderType
   bucketName: string
   region: string
-  credential: string
+  accessKeyId: string
+  accessKeySecret: string
+  securityToken?: string
   isPrimary: boolean
 }
 
 type EditProjectCDNInput = {
   providerType: ProviderType
   cdnEndpoint: string
+  region: string
+  accessKeyId: string
+  accessKeySecret: string
+  securityToken?: string
   purgeScope: PurgeScope
   isPrimary: boolean
 }
@@ -209,13 +217,19 @@ export function ProjectsPage() {
           providerType: bucket.providerType as ProviderType,
           bucketName: bucket.bucketName,
           region: bucket.region,
-          credential: '',
+          accessKeyId: '',
+          accessKeySecret: '',
+          securityToken: '',
           isPrimary: bucket.isPrimary,
         })) ?? [],
       cdns:
         selectedProject.cdns?.map((cdn) => ({
           providerType: cdn.providerType as ProviderType,
           cdnEndpoint: cdn.cdnEndpoint,
+          region: cdn.region || '',
+          accessKeyId: '',
+          accessKeySecret: '',
+          securityToken: '',
           purgeScope: (cdn.purgeScope || 'url') as PurgeScope,
           isPrimary: cdn.isPrimary,
         })) ?? [],
@@ -474,6 +488,12 @@ export function ProjectsPage() {
                               <Typography.Text type="secondary">
                                 PurgeScope: {cdn.purgeScope || 'url'}
                               </Typography.Text>
+                              <Typography.Text type="secondary">
+                                Region: {cdn.region || '-'}
+                              </Typography.Text>
+                              <Typography.Text type="secondary">
+                                Credential: {cdn.credentialMasked || '-'}
+                              </Typography.Text>
                             </Space>
                           </List.Item>
                         )}
@@ -531,7 +551,9 @@ export function ProjectsPage() {
                       providerType: 'aliyun',
                       bucketName: '',
                       region: '',
-                      credential: '',
+                      accessKeyId: '',
+                      accessKeySecret: '',
+                      securityToken: '',
                       isPrimary: fields.length === 0,
                     })
                   }
@@ -566,7 +588,7 @@ export function ProjectsPage() {
                     }
                   >
                     <Row gutter={12}>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item
                           label="Provider"
                           name={[field.name, 'providerType']}
@@ -575,7 +597,7 @@ export function ProjectsPage() {
                           <Select options={providerOptions} />
                         </Form.Item>
                       </Col>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item
                           label="BucketName"
                           name={[field.name, 'bucketName']}
@@ -584,19 +606,44 @@ export function ProjectsPage() {
                           <Input />
                         </Form.Item>
                       </Col>
-                      <Col span={8}>
-                        <Form.Item label="Region" name={[field.name, 'region']}>
+                      <Col span={6}>
+                        <Form.Item
+                          label="Region"
+                          name={[field.name, 'region']}
+                          rules={[{ required: true, message: '请输入 Region' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={6}>
+                        <Form.Item
+                          label="SecurityToken"
+                          name={[field.name, 'securityToken']}
+                        >
                           <Input />
                         </Form.Item>
                       </Col>
                     </Row>
-                    <Form.Item
-                      label="Credential"
-                      name={[field.name, 'credential']}
-                      rules={[{ required: true, message: '请填写 Credential（必填）' }]}
-                    >
-                      <Input.Password placeholder="请输入可用凭证（更新接口要求）" />
-                    </Form.Item>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Form.Item
+                          label="AccessKeyId"
+                          name={[field.name, 'accessKeyId']}
+                          rules={[{ required: true, message: '请输入 AccessKeyId' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item
+                          label="AccessKeySecret"
+                          name={[field.name, 'accessKeySecret']}
+                          rules={[{ required: true, message: '请输入 AccessKeySecret' }]}
+                        >
+                          <Input.Password />
+                        </Form.Item>
+                      </Col>
+                    </Row>
                   </Card>
                 ))}
                 {fields.length === 0 ? (
@@ -620,6 +667,10 @@ export function ProjectsPage() {
                     add({
                       providerType: 'aliyun',
                       cdnEndpoint: '',
+                      region: '',
+                      accessKeyId: '',
+                      accessKeySecret: '',
+                      securityToken: '',
                       purgeScope: 'url',
                       isPrimary: fields.length === 0,
                     })
@@ -655,7 +706,7 @@ export function ProjectsPage() {
                     }
                   >
                     <Row gutter={12}>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item
                           label="Provider"
                           name={[field.name, 'providerType']}
@@ -664,11 +715,20 @@ export function ProjectsPage() {
                           <Select options={providerOptions} />
                         </Form.Item>
                       </Col>
-                      <Col span={10}>
+                      <Col span={8}>
                         <Form.Item
                           label="CDN Endpoint"
                           name={[field.name, 'cdnEndpoint']}
                           rules={[{ required: true, message: '请输入 CDN Endpoint' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={4}>
+                        <Form.Item
+                          label="Region"
+                          name={[field.name, 'region']}
+                          rules={[{ required: true, message: '请输入 Region' }]}
                         >
                           <Input />
                         </Form.Item>
@@ -681,6 +741,34 @@ export function ProjectsPage() {
                           initialValue="url"
                         >
                           <Select options={purgeScopeOptions} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={12}>
+                      <Col span={8}>
+                        <Form.Item
+                          label="AccessKeyId"
+                          name={[field.name, 'accessKeyId']}
+                          rules={[{ required: true, message: '请输入 AccessKeyId' }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item
+                          label="AccessKeySecret"
+                          name={[field.name, 'accessKeySecret']}
+                          rules={[{ required: true, message: '请输入 AccessKeySecret' }]}
+                        >
+                          <Input.Password />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item
+                          label="SecurityToken"
+                          name={[field.name, 'securityToken']}
+                        >
+                          <Input />
                         </Form.Item>
                       </Col>
                     </Row>

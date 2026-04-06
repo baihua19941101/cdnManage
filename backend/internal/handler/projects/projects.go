@@ -1,8 +1,10 @@
 package projects
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -51,6 +53,9 @@ type projectResponse struct {
 }
 
 type projectBucketRequest struct {
+	AccessKeyID          string `json:"accessKeyId"`
+	AccessKeySecret      string `json:"accessKeySecret"`
+	SecurityToken        string `json:"securityToken"`
 	ProviderType         string `json:"providerType"`
 	BucketName           string `json:"bucketName" binding:"required"`
 	Region               string `json:"region"`
@@ -60,10 +65,16 @@ type projectBucketRequest struct {
 }
 
 type projectCDNRequest struct {
-	ProviderType string `json:"providerType" binding:"required"`
-	CDNEndpoint  string `json:"cdnEndpoint" binding:"required"`
-	PurgeScope   string `json:"purgeScope"`
-	IsPrimary    bool   `json:"isPrimary"`
+	AccessKeyID          string `json:"accessKeyId"`
+	AccessKeySecret      string `json:"accessKeySecret"`
+	SecurityToken        string `json:"securityToken"`
+	ProviderType         string `json:"providerType" binding:"required"`
+	CDNEndpoint          string `json:"cdnEndpoint" binding:"required"`
+	Region               string `json:"region"`
+	Credential           string `json:"credential"`
+	CredentialCiphertext string `json:"credentialCiphertext"`
+	PurgeScope           string `json:"purgeScope"`
+	IsPrimary            bool   `json:"isPrimary"`
 }
 
 type projectBucketResponse struct {
@@ -76,11 +87,13 @@ type projectBucketResponse struct {
 }
 
 type projectCDNResponse struct {
-	ID           uint64 `json:"id"`
-	ProviderType string `json:"providerType"`
-	CDNEndpoint  string `json:"cdnEndpoint"`
-	PurgeScope   string `json:"purgeScope"`
-	IsPrimary    bool   `json:"isPrimary"`
+	ID               uint64 `json:"id"`
+	ProviderType     string `json:"providerType"`
+	CDNEndpoint      string `json:"cdnEndpoint"`
+	Region           string `json:"region"`
+	CredentialMasked string `json:"credentialMasked,omitempty"`
+	PurgeScope       string `json:"purgeScope"`
+	IsPrimary        bool   `json:"isPrimary"`
 }
 
 type refreshURLsRequest struct {
@@ -259,11 +272,13 @@ func (h *Handler) GetCDNs(ctx *gin.Context) {
 	response := make([]projectCDNResponse, 0, len(cdns))
 	for _, cdn := range cdns {
 		response = append(response, projectCDNResponse{
-			ID:           cdn.ID,
-			ProviderType: cdn.ProviderType,
-			CDNEndpoint:  cdn.CDNEndpoint,
-			PurgeScope:   cdn.PurgeScope,
-			IsPrimary:    cdn.IsPrimary,
+			ID:               cdn.ID,
+			ProviderType:     cdn.ProviderType,
+			CDNEndpoint:      cdn.CDNEndpoint,
+			Region:           cdn.Region,
+			CredentialMasked: cdn.CredentialCiphertext,
+			PurgeScope:       cdn.PurgeScope,
+			IsPrimary:        cdn.IsPrimary,
 		})
 	}
 
@@ -294,11 +309,13 @@ func (h *Handler) UpdateCDNs(ctx *gin.Context) {
 	response := make([]projectCDNResponse, 0, len(cdns))
 	for _, cdn := range cdns {
 		response = append(response, projectCDNResponse{
-			ID:           cdn.ID,
-			ProviderType: cdn.ProviderType,
-			CDNEndpoint:  cdn.CDNEndpoint,
-			PurgeScope:   cdn.PurgeScope,
-			IsPrimary:    cdn.IsPrimary,
+			ID:               cdn.ID,
+			ProviderType:     cdn.ProviderType,
+			CDNEndpoint:      cdn.CDNEndpoint,
+			Region:           cdn.Region,
+			CredentialMasked: cdn.CredentialCiphertext,
+			PurgeScope:       cdn.PurgeScope,
+			IsPrimary:        cdn.IsPrimary,
 		})
 	}
 
@@ -448,11 +465,13 @@ func toProjectResponse(project *model.Project) projectResponse {
 		response.CDNs = make([]projectCDNResponse, 0, len(project.CDNs))
 		for _, cdn := range project.CDNs {
 			response.CDNs = append(response.CDNs, projectCDNResponse{
-				ID:           cdn.ID,
-				ProviderType: cdn.ProviderType,
-				CDNEndpoint:  cdn.CDNEndpoint,
-				PurgeScope:   cdn.PurgeScope,
-				IsPrimary:    cdn.IsPrimary,
+				ID:               cdn.ID,
+				ProviderType:     cdn.ProviderType,
+				CDNEndpoint:      cdn.CDNEndpoint,
+				Region:           cdn.Region,
+				CredentialMasked: cdn.CredentialCiphertext,
+				PurgeScope:       cdn.PurgeScope,
+				IsPrimary:        cdn.IsPrimary,
 			})
 		}
 	}
@@ -467,7 +486,7 @@ func toProjectBucketInputs(requests []projectBucketRequest) []serviceprojects.Pr
 			ProviderType:         bucket.ProviderType,
 			BucketName:           bucket.BucketName,
 			Region:               bucket.Region,
-			Credential:           bucket.Credential,
+			Credential:           coalesceCredential(bucket.Credential, bucket.AccessKeyID, bucket.AccessKeySecret, bucket.SecurityToken, bucket.Region),
 			CredentialCiphertext: bucket.CredentialCiphertext,
 			IsPrimary:            bucket.IsPrimary,
 		})
@@ -477,7 +496,8 @@ func toProjectBucketInputs(requests []projectBucketRequest) []serviceprojects.Pr
 
 func validateBucketCredentialRequests(buckets []projectBucketRequest) error {
 	for _, bucket := range buckets {
-		if bucket.Credential == "" && bucket.CredentialCiphertext == "" {
+		if strings.TrimSpace(coalesceCredential(bucket.Credential, bucket.AccessKeyID, bucket.AccessKeySecret, bucket.SecurityToken, bucket.Region)) == "" &&
+			strings.TrimSpace(bucket.CredentialCiphertext) == "" {
 			return httpresp.NewAppError(http.StatusBadRequest, "validation_error", "bucket credential is required", nil)
 		}
 	}
@@ -488,13 +508,46 @@ func toProjectCDNInputs(requests []projectCDNRequest) []serviceprojects.ProjectC
 	result := make([]serviceprojects.ProjectCDNInput, 0, len(requests))
 	for _, cdn := range requests {
 		result = append(result, serviceprojects.ProjectCDNInput{
-			ProviderType: cdn.ProviderType,
-			CDNEndpoint:  cdn.CDNEndpoint,
-			PurgeScope:   cdn.PurgeScope,
-			IsPrimary:    cdn.IsPrimary,
+			ProviderType:         cdn.ProviderType,
+			CDNEndpoint:          cdn.CDNEndpoint,
+			Region:               cdn.Region,
+			Credential:           coalesceCredential(cdn.Credential, cdn.AccessKeyID, cdn.AccessKeySecret, cdn.SecurityToken, cdn.Region),
+			CredentialCiphertext: cdn.CredentialCiphertext,
+			PurgeScope:           cdn.PurgeScope,
+			IsPrimary:            cdn.IsPrimary,
 		})
 	}
 	return result
+}
+
+func coalesceCredential(raw, accessKeyID, accessKeySecret, securityToken, region string) string {
+	trimmedRaw := strings.TrimSpace(raw)
+	if trimmedRaw != "" {
+		return trimmedRaw
+	}
+
+	ak := strings.TrimSpace(accessKeyID)
+	sk := strings.TrimSpace(accessKeySecret)
+	if ak == "" || sk == "" {
+		return ""
+	}
+
+	payload := map[string]interface{}{
+		"accessKeyId":     ak,
+		"accessKeySecret": sk,
+	}
+	if token := strings.TrimSpace(securityToken); token != "" {
+		payload["securityToken"] = token
+	}
+	if reg := strings.TrimSpace(region); reg != "" {
+		payload["customFields"] = map[string]string{"region": reg}
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func toCDNTaskResultResponse(result provider.TaskResult) cdnTaskResultResponse {

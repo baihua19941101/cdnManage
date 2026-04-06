@@ -55,10 +55,13 @@ type ProjectBucketInput struct {
 }
 
 type ProjectCDNInput struct {
-	ProviderType string
-	CDNEndpoint  string
-	PurgeScope   string
-	IsPrimary    bool
+	ProviderType         string
+	CDNEndpoint          string
+	Region               string
+	Credential           string
+	CredentialCiphertext string
+	PurgeScope           string
+	IsPrimary            bool
 }
 
 type ListBucketObjectsInput struct {
@@ -152,6 +155,7 @@ func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]
 
 	for index := range projects {
 		s.maskBucketCredentials(&projects[index])
+		s.maskCDNCredentials(&projects[index])
 	}
 
 	return projects, nil
@@ -163,6 +167,7 @@ func (s *Service) GetByID(ctx context.Context, projectID uint64) (*model.Project
 		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
 	}
 	s.maskBucketCredentials(project)
+	s.maskCDNCredentials(project)
 	return project, nil
 }
 
@@ -253,7 +258,7 @@ func (s *Service) UpdateCDNs(ctx context.Context, projectID uint64, cdns []Proje
 
 	if err := s.tx.WithinTransaction(ctx, func(repos repository.Repositories) error {
 		project.Name = project.Name
-		return replaceCDNBindings(ctx, repos.ProjectCDNs(), projectID, cdns)
+		return s.replaceCDNBindings(ctx, repos.ProjectCDNs(), projectID, cdns)
 	}); err != nil {
 		return nil, err
 	}
@@ -508,7 +513,7 @@ func (s *Service) replaceBindings(ctx context.Context, repos repository.Reposito
 		}
 	}
 
-	if err := replaceCDNBindings(ctx, repos.ProjectCDNs(), projectID, cdns); err != nil {
+	if err := s.replaceCDNBindings(ctx, repos.ProjectCDNs(), projectID, cdns); err != nil {
 		return err
 	}
 
@@ -664,7 +669,7 @@ func projectBucketProviderType(buckets []model.ProjectBucket) string {
 	return providerType
 }
 
-func replaceCDNBindings(ctx context.Context, repo projectCDNRepository, projectID uint64, cdns []ProjectCDNInput) error {
+func (s *Service) replaceCDNBindings(ctx context.Context, repo projectCDNRepository, projectID uint64, cdns []ProjectCDNInput) error {
 	existingCDNs, err := repo.ListByProjectID(ctx, projectID)
 	if err != nil {
 		return fmt.Errorf("list existing cdns: %w", err)
@@ -675,16 +680,27 @@ func replaceCDNBindings(ctx context.Context, repo projectCDNRepository, projectI
 		}
 	}
 	for _, cdn := range cdns {
+		credentialCiphertext := cdn.CredentialCiphertext
+		if s.credentialCipher != nil {
+			encrypted, err := s.credentialCipher.Encrypt(cdnCredentialPlaintext(cdn))
+			if err != nil {
+				return fmt.Errorf("encrypt cdn credential: %w", err)
+			}
+			credentialCiphertext = encrypted
+		}
+
 		purgeScope := cdn.PurgeScope
 		if purgeScope == "" {
 			purgeScope = "url"
 		}
 		if err := repo.Create(ctx, &model.ProjectCDN{
-			ProjectID:    projectID,
-			ProviderType: cdn.ProviderType,
-			CDNEndpoint:  cdn.CDNEndpoint,
-			PurgeScope:   purgeScope,
-			IsPrimary:    cdn.IsPrimary,
+			ProjectID:            projectID,
+			ProviderType:         cdn.ProviderType,
+			CDNEndpoint:          cdn.CDNEndpoint,
+			Region:               cdn.Region,
+			CredentialCiphertext: credentialCiphertext,
+			PurgeScope:           purgeScope,
+			IsPrimary:            cdn.IsPrimary,
 		}); err != nil {
 			return fmt.Errorf("create project cdn: %w", err)
 		}
@@ -856,6 +872,13 @@ func bucketCredentialPlaintext(bucket ProjectBucketInput) string {
 	return bucket.CredentialCiphertext
 }
 
+func cdnCredentialPlaintext(cdn ProjectCDNInput) string {
+	if cdn.Credential != "" {
+		return cdn.Credential
+	}
+	return cdn.CredentialCiphertext
+}
+
 func (s *Service) bucketCredentialPayload(bucket model.ProjectBucket) (provider.CredentialPayload, error) {
 	plaintext := bucket.CredentialCiphertext
 	if s.credentialCipher != nil {
@@ -962,17 +985,34 @@ func (s *Service) resolveCDNProviderAndCredential(ctx context.Context, projectID
 		return nil, nil, provider.CredentialPayload{}, mapCDNOperationError(err, "resolve_provider")
 	}
 
-	bucket, err := selectProjectBucket(project, "")
-	if err != nil {
-		return nil, nil, provider.CredentialPayload{}, err
-	}
-
-	credentialPayload, err := s.bucketCredentialPayload(*bucket)
+	credentialPayload, err := s.cdnCredentialPayload(*cdnBinding)
 	if err != nil {
 		return nil, nil, provider.CredentialPayload{}, err
 	}
 
 	return cdnBinding, cdnProvider, credentialPayload, nil
+}
+
+func (s *Service) cdnCredentialPayload(cdn model.ProjectCDN) (provider.CredentialPayload, error) {
+	plaintext := cdn.CredentialCiphertext
+	if s.credentialCipher != nil {
+		decrypted, err := s.credentialCipher.Decrypt(cdn.CredentialCiphertext)
+		if err == nil {
+			plaintext = decrypted
+		}
+	}
+
+	payload := parseCredentialPayload(plaintext)
+	if strings.TrimSpace(payload.AccessKeyID) == "" {
+		return provider.CredentialPayload{}, httpresp.NewAppError(400, "invalid_cdn_credential", "cdn credential is invalid", nil)
+	}
+	if strings.TrimSpace(cdn.Region) != "" {
+		if payload.CustomFields == nil {
+			payload.CustomFields = map[string]string{}
+		}
+		payload.CustomFields["region"] = cdn.Region
+	}
+	return payload, nil
 }
 
 func trimNonEmptyValues(values []string) []string {
@@ -1000,6 +1040,15 @@ func (s *Service) maskBucketCredentials(project *model.Project) {
 	}
 	for index := range project.Buckets {
 		project.Buckets[index].CredentialCiphertext = s.maskCredential(project.Buckets[index].CredentialCiphertext)
+	}
+}
+
+func (s *Service) maskCDNCredentials(project *model.Project) {
+	if project == nil {
+		return
+	}
+	for index := range project.CDNs {
+		project.CDNs[index].CredentialCiphertext = s.maskCredential(project.CDNs[index].CredentialCiphertext)
 	}
 }
 
