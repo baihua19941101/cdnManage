@@ -9,21 +9,21 @@ describe('managementValidation', () => {
   it('validates project binding counts and primary flags', () => {
     expect(
       validateProjectBindingCounts({
-        bucketCount: 0,
-        cdnCount: 1,
+        bucketCount: 3,
+        cdnCount: 0,
         primaryBucketCount: 1,
-        primaryCDNCount: 1,
+        primaryCDNCount: 0,
       }),
-    ).toBe('存储桶绑定数量必须为 1 到 2 个。')
+    ).toBe('存储桶绑定数量最多为 2 个。')
 
     expect(
       validateProjectBindingCounts({
-        bucketCount: 1,
+        bucketCount: 0,
         cdnCount: 3,
-        primaryBucketCount: 1,
-        primaryCDNCount: 1,
+        primaryBucketCount: 0,
+        primaryCDNCount: 0,
       }),
-    ).toBe('CDN 绑定数量必须为 1 到 2 个。')
+    ).toBe('CDN 绑定数量最多为 2 个。')
 
     expect(
       validateProjectBindingCounts({
@@ -33,6 +33,33 @@ describe('managementValidation', () => {
         primaryCDNCount: 1,
       }),
     ).toBe('存储桶必须且只能设置一个主绑定。')
+
+    expect(
+      validateProjectBindingCounts({
+        bucketCount: 0,
+        cdnCount: 0,
+        primaryBucketCount: 0,
+        primaryCDNCount: 0,
+      }),
+    ).toBeNull()
+
+    expect(
+      validateProjectBindingCounts({
+        bucketCount: 1,
+        cdnCount: 0,
+        primaryBucketCount: 1,
+        primaryCDNCount: 0,
+      }),
+    ).toBeNull()
+
+    expect(
+      validateProjectBindingCounts({
+        bucketCount: 0,
+        cdnCount: 1,
+        primaryBucketCount: 0,
+        primaryCDNCount: 1,
+      }),
+    ).toBeNull()
 
     expect(
       validateProjectBindingCounts({
@@ -68,4 +95,3 @@ describe('managementValidation', () => {
     ).toBe(true)
   })
 })
-

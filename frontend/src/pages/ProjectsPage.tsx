@@ -1,4 +1,9 @@
-import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons'
 import {
   Alert,
   Button,
@@ -227,23 +232,8 @@ export function ProjectsPage() {
     form.setFieldsValue({
       name: '',
       description: '',
-      buckets: [
-        {
-          providerType: 'aliyun',
-          bucketName: '',
-          region: '',
-          credential: '',
-          isPrimary: true,
-        },
-      ],
-      cdns: [
-        {
-          providerType: 'aliyun',
-          cdnEndpoint: '',
-          purgeScope: 'url',
-          isPrimary: true,
-        },
-      ],
+      buckets: [],
+      cdns: [],
     })
     setEditVisible(true)
   }
@@ -514,7 +504,7 @@ export function ProjectsPage() {
           style={{ marginBottom: 16 }}
           message={
             projectModalMode === 'create'
-              ? '请至少配置 1 个存储桶与 1 个 CDN 绑定，并保证各自只有一个 Primary。'
+              ? '项目可先空配置创建；可按需绑定 0~2 个存储桶与 0~2 个 CDN，并在每类存在绑定时仅设置一个 Primary。'
               : '后端更新接口要求每个存储桶提供有效凭证，本次编辑请重新填写每个存储桶的 Credential。'
           }
         />
@@ -530,24 +520,49 @@ export function ProjectsPage() {
             <Input.TextArea rows={3} />
           </Form.Item>
 
-          <Divider>存储桶绑定（1~2）</Divider>
+          <Divider>存储桶绑定（0~2）</Divider>
           <Form.List name="buckets">
-            {(fields) => (
+            {(fields, { add, remove }) => (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    add({
+                      providerType: 'aliyun',
+                      bucketName: '',
+                      region: '',
+                      credential: '',
+                      isPrimary: fields.length === 0,
+                    })
+                  }
+                  disabled={fields.length >= 2}
+                >
+                  添加存储桶绑定
+                </Button>
                 {fields.map((field, index) => (
                   <Card
                     key={field.key}
                     size="small"
                     title={`Bucket #${index + 1}`}
                     extra={
-                      <Form.Item
-                        noStyle
-                        name={[field.name, 'isPrimary']}
-                        valuePropName="checked"
-                        initialValue={index === 0}
-                      >
-                        <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
-                      </Form.Item>
+                      <Space size={8}>
+                        <Form.Item
+                          noStyle
+                          name={[field.name, 'isPrimary']}
+                          valuePropName="checked"
+                          initialValue={index === 0}
+                        >
+                          <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
+                        </Form.Item>
+                        <Button
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => remove(field.name)}
+                          size="small"
+                        >
+                          删除
+                        </Button>
+                      </Space>
                     }
                   >
                     <Row gutter={12}>
@@ -584,28 +599,59 @@ export function ProjectsPage() {
                     </Form.Item>
                   </Card>
                 ))}
+                {fields.length === 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="当前未绑定存储桶。可以先创建项目，后续再补充绑定。"
+                  />
+                ) : null}
               </Space>
             )}
           </Form.List>
 
-          <Divider>CDN 绑定（1~2）</Divider>
+          <Divider>CDN 绑定（0~2）</Divider>
           <Form.List name="cdns">
-            {(fields) => (
+            {(fields, { add, remove }) => (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    add({
+                      providerType: 'aliyun',
+                      cdnEndpoint: '',
+                      purgeScope: 'url',
+                      isPrimary: fields.length === 0,
+                    })
+                  }
+                  disabled={fields.length >= 2}
+                >
+                  添加 CDN 绑定
+                </Button>
                 {fields.map((field, index) => (
                   <Card
                     key={field.key}
                     size="small"
                     title={`CDN #${index + 1}`}
                     extra={
-                      <Form.Item
-                        noStyle
-                        name={[field.name, 'isPrimary']}
-                        valuePropName="checked"
-                        initialValue={index === 0}
-                      >
-                        <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
-                      </Form.Item>
+                      <Space size={8}>
+                        <Form.Item
+                          noStyle
+                          name={[field.name, 'isPrimary']}
+                          valuePropName="checked"
+                          initialValue={index === 0}
+                        >
+                          <Switch checkedChildren="Primary" unCheckedChildren="Secondary" />
+                        </Form.Item>
+                        <Button
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => remove(field.name)}
+                          size="small"
+                        >
+                          删除
+                        </Button>
+                      </Space>
                     }
                   >
                     <Row gutter={12}>
@@ -640,6 +686,13 @@ export function ProjectsPage() {
                     </Row>
                   </Card>
                 ))}
+                {fields.length === 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="当前未绑定 CDN。可以先创建项目，后续再补充绑定。"
+                  />
+                ) : null}
               </Space>
             )}
           </Form.List>

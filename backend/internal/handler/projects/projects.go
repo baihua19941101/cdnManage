@@ -30,15 +30,15 @@ type projectScopeMiddleware interface {
 type createProjectRequest struct {
 	Name        string                 `json:"name" binding:"required"`
 	Description string                 `json:"description"`
-	Buckets     []projectBucketRequest `json:"buckets" binding:"required"`
-	CDNs        []projectCDNRequest    `json:"cdns" binding:"required"`
+	Buckets     []projectBucketRequest `json:"buckets"`
+	CDNs        []projectCDNRequest    `json:"cdns"`
 }
 
 type updateProjectRequest struct {
 	Name        string                 `json:"name" binding:"required"`
 	Description string                 `json:"description"`
-	Buckets     []projectBucketRequest `json:"buckets" binding:"required"`
-	CDNs        []projectCDNRequest    `json:"cdns" binding:"required"`
+	Buckets     []projectBucketRequest `json:"buckets"`
+	CDNs        []projectCDNRequest    `json:"cdns"`
 }
 
 type projectResponse struct {
