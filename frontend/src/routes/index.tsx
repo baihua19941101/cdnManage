@@ -9,6 +9,7 @@ import { NotFoundPage } from '../pages/NotFoundPage'
 import { ProjectsPage } from '../pages/ProjectsPage'
 import { ResourcePage } from '../pages/ResourcePage'
 import { SetupPage } from '../pages/SetupPage'
+import { StoragePage } from '../pages/StoragePage'
 import { UnauthorizedPage } from '../pages/UnauthorizedPage'
 import { UsersPage } from '../pages/UsersPage'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
@@ -57,15 +58,7 @@ export function AppRouter() {
                 </PlatformAdminRoute>
               }
             />
-            <Route
-              path="storage"
-              element={
-                <ResourcePage
-                  title="Storage"
-                  description="Bucket object workflows and audit shortcuts will land in task 12.1."
-                />
-              }
-            />
+            <Route path="storage" element={<StoragePage />} />
             <Route
               path="cdn"
               element={
