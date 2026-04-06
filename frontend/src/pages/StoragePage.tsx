@@ -80,6 +80,77 @@ type RenameFormValues = {
   targetKey: string
 }
 
+type UploadSummary = {
+  successCount: number
+  failureCount: number
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+const parseUploadSummary = (data: unknown, fallbackTotal: number): UploadSummary => {
+  if (isRecord(data)) {
+    const successCount = data.successCount
+    const failureCount = data.failureCount ?? data.failedCount
+    if (typeof successCount === 'number' && typeof failureCount === 'number') {
+      return {
+        successCount: Math.max(0, successCount),
+        failureCount: Math.max(0, failureCount),
+      }
+    }
+
+    const resultListCandidates = [data.results, data.files, data.items, data.uploads]
+    for (const candidate of resultListCandidates) {
+      if (Array.isArray(candidate)) {
+        let success = 0
+        let failure = 0
+
+        for (const item of candidate) {
+          if (!isRecord(item)) {
+            success += 1
+            continue
+          }
+
+          if (typeof item.success === 'boolean') {
+            if (item.success) {
+              success += 1
+            } else {
+              failure += 1
+            }
+            continue
+          }
+
+          const status =
+            typeof item.status === 'string'
+              ? item.status.toLowerCase()
+              : typeof item.result === 'string'
+                ? item.result.toLowerCase()
+                : ''
+
+          if (status === 'failure' || status === 'failed' || status === 'error') {
+            failure += 1
+            continue
+          }
+          success += 1
+        }
+
+        return { successCount: success, failureCount: failure }
+      }
+    }
+
+    if (Array.isArray(data.successes) || Array.isArray(data.failures)) {
+      const success = Array.isArray(data.successes) ? data.successes.length : 0
+      const failure = Array.isArray(data.failures) ? data.failures.length : 0
+      return { successCount: success, failureCount: failure }
+    }
+  }
+
+  return {
+    successCount: fallbackTotal,
+    failureCount: 0,
+  }
+}
+
 export function StoragePage() {
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
@@ -92,7 +163,7 @@ export function StoragePage() {
   const [submitting, setSubmitting] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
 
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [pendingUploadFiles, setPendingUploadFiles] = useState<UploadFile[]>([])
   const [uploadKey, setUploadKey] = useState('')
 
   const [renameVisible, setRenameVisible] = useState(false)
@@ -196,25 +267,52 @@ export function StoragePage() {
       messageApi.error('请先填写并查询 Project ID 与 BucketName。')
       return
     }
-    if (!selectedFile) {
+
+    const files = pendingUploadFiles.flatMap((item) =>
+      item.originFileObj ? [item.originFileObj] : [],
+    )
+    if (files.length === 0) {
       messageApi.error('请选择待上传文件。')
       return
     }
 
     const formData = new FormData()
     formData.append('bucketName', bucketName)
-    if (uploadKey.trim()) {
-      formData.append('key', uploadKey.trim())
+
+    const trimmedKey = uploadKey.trim()
+    if (files.length === 1) {
+      const singleFile = files[0]
+      if (!singleFile) {
+        messageApi.error('请选择待上传文件。')
+        return
+      }
+      if (trimmedKey) {
+        formData.append('key', trimmedKey)
+      }
+      formData.append('file', singleFile)
+    } else {
+      files.forEach((file) => formData.append('files', file))
+      if (trimmedKey) {
+        formData.append('keyPrefix', trimmedKey)
+      }
     }
-    formData.append('file', selectedFile)
 
     setSubmitting(true)
     try {
-      await apiClient.post(`/projects/${projectID}/storage/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      messageApi.success('上传成功。')
-      setSelectedFile(null)
+      const response = await apiClient.post<ApiResponse<unknown>>(
+        `/projects/${projectID}/storage/upload`,
+        formData,
+        {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        },
+      )
+      const summary = parseUploadSummary(response.data?.data, files.length)
+      if (summary.failureCount > 0) {
+        messageApi.warning(`上传完成：成功 ${summary.successCount}，失败 ${summary.failureCount}。`)
+      } else {
+        messageApi.success(`上传完成：成功 ${summary.successCount}，失败 0。`)
+      }
+      setPendingUploadFiles([])
       setUploadKey('')
       await queryObjects()
     } catch (error) {
@@ -491,26 +589,32 @@ export function StoragePage() {
           extra={
             <Space>
               <Upload
+                multiple
                 beforeUpload={(file) => {
-                  setSelectedFile(file)
+                  setPendingUploadFiles((prev) => {
+                    if (prev.some((item) => item.uid === file.uid)) {
+                      return prev
+                    }
+                    return [
+                      ...prev,
+                      {
+                        uid: file.uid,
+                        name: file.name,
+                        status: 'done',
+                        type: file.type,
+                        size: file.size,
+                        originFileObj: file,
+                      } satisfies UploadFile,
+                    ]
+                  })
                   return false
                 }}
-                onRemove={() => {
-                  setSelectedFile(null)
+                onRemove={(file) => {
+                  setPendingUploadFiles((prev) => prev.filter((item) => item.uid !== file.uid))
                 }}
-                maxCount={1}
-                showUploadList={!!selectedFile}
-                fileList={
-                  selectedFile
-                    ? [
-                        {
-                          uid: `${selectedFile.name}-${selectedFile.lastModified}`,
-                          name: selectedFile.name,
-                          status: 'done',
-                        } satisfies UploadFile,
-                      ]
-                    : []
-                }
+                showUploadList
+                fileList={pendingUploadFiles}
+                disabled={!canWrite}
               >
                 <Button icon={<UploadOutlined />} disabled={!canWrite}>
                   选择文件
@@ -527,12 +631,20 @@ export function StoragePage() {
             </Space>
           }
         >
-          <Input
-            placeholder="可选：目标对象 Key（不填默认使用文件名）"
-            value={uploadKey}
-            onChange={(event) => setUploadKey(event.target.value)}
-            disabled={!canWrite}
-          />
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Input
+              placeholder="可选：单文件时为对象 Key，多文件时作为 keyPrefix"
+              value={uploadKey}
+              onChange={(event) => setUploadKey(event.target.value)}
+              disabled={!canWrite}
+            />
+            <Typography.Text type="secondary">
+              待上传文件：{pendingUploadFiles.length}
+              {pendingUploadFiles.length > 1 && uploadKey.trim()
+                ? '（将使用当前输入作为 keyPrefix）'
+                : ''}
+            </Typography.Text>
+          </Space>
         </Card>
 
         <Card title="Object List">

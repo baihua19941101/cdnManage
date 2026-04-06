@@ -54,6 +54,30 @@ type listObjectsResponse struct {
 	Objects []objectResponse `json:"objects"`
 }
 
+type uploadObjectFieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+type uploadObjectItemResult struct {
+	FileName string `json:"fileName"`
+	Key      string `json:"key,omitempty"`
+	Result   string `json:"result"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type uploadObjectSummary struct {
+	Total   int `json:"total"`
+	Success int `json:"success"`
+	Failure int `json:"failure"`
+}
+
+type uploadObjectResponse struct {
+	Message string                   `json:"message"`
+	Summary uploadObjectSummary      `json:"summary"`
+	Results []uploadObjectItemResult `json:"results"`
+}
+
 type auditLogResponse struct {
 	ID               uint64                 `json:"id"`
 	ActorUserID      uint64                 `json:"actorUserId"`
@@ -173,45 +197,137 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		return
 	}
 
-	fileHeader, err := ctx.FormFile("file")
+	fileHeaders, err := collectUploadFileHeaders(ctx)
 	if err != nil {
-		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "file is required", nil))
-		return
-	}
-
-	key := strings.TrimSpace(ctx.PostForm("key"))
-	if key == "" {
-		key = fileHeader.Filename
-	}
-	if key == "" {
-		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "object key is required", nil))
-		return
-	}
-
-	file, err := fileHeader.Open()
-	if err != nil {
-		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "file could not be opened", nil))
-		return
-	}
-	defer file.Close()
-
-	contentType := fileContentType(fileHeader)
-	err = h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
-		BucketName:  ctx.PostForm("bucketName"),
-		Key:         key,
-		ContentType: contentType,
-		Content:     file,
-		Size:        fileHeader.Size,
-	})
-	if err != nil {
-		h.recordAudit(ctx, projectID, "object.upload", "object", key, model.AuditResultFailure, gin.H{"error": err.Error()})
 		ctx.Error(err)
 		return
 	}
-	h.recordAudit(ctx, projectID, "object.upload", "object", key, model.AuditResultSuccess, gin.H{
-		"size": fileHeader.Size,
+
+	key, hasKey := ctx.GetPostForm("key")
+	key = strings.TrimSpace(key)
+	if hasKey && key == "" {
+		ctx.Error(uploadValidationError("key must not be empty", []uploadObjectFieldError{{
+			Field:   "key",
+			Message: "key must not be empty when provided",
+		}}))
+		return
+	}
+
+	keyPrefix, hasKeyPrefix := ctx.GetPostForm("keyPrefix")
+	keyPrefix = strings.TrimSpace(keyPrefix)
+	if hasKeyPrefix && keyPrefix == "" {
+		ctx.Error(uploadValidationError("keyPrefix must not be empty", []uploadObjectFieldError{{
+			Field:   "keyPrefix",
+			Message: "keyPrefix must not be empty when provided",
+		}}))
+		return
+	}
+	if len(fileHeaders) > 1 && key != "" {
+		ctx.Error(uploadValidationError("key is only supported for single file upload", []uploadObjectFieldError{{
+			Field:   "key",
+			Message: "use keyPrefix for multi-file upload",
+		}}))
+		return
+	}
+
+	bucketName := ctx.PostForm("bucketName")
+	results := make([]uploadObjectItemResult, 0, len(fileHeaders))
+	successCount := 0
+
+	for _, fileHeader := range fileHeaders {
+		fileName := ""
+		if fileHeader != nil {
+			fileName = strings.TrimSpace(fileHeader.Filename)
+		}
+
+		targetKey, keyErr := resolveUploadObjectKey(fileHeader, key, keyPrefix, len(fileHeaders))
+		if keyErr != nil {
+			results = append(results, uploadObjectItemResult{
+				FileName: fileName,
+				Key:      targetKey,
+				Result:   "failure",
+				Reason:   keyErr.Error(),
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
+				"error":    keyErr.Error(),
+				"fileName": fileName,
+			})
+			continue
+		}
+		if fileHeader == nil {
+			results = append(results, uploadObjectItemResult{
+				FileName: fileName,
+				Key:      targetKey,
+				Result:   "failure",
+				Reason:   "file is required",
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
+				"error":    "file header is missing",
+				"fileName": fileName,
+			})
+			continue
+		}
+
+		file, openErr := fileHeader.Open()
+		if openErr != nil {
+			results = append(results, uploadObjectItemResult{
+				FileName: fileName,
+				Key:      targetKey,
+				Result:   "failure",
+				Reason:   "file could not be opened",
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
+				"error":    openErr.Error(),
+				"fileName": fileName,
+			})
+			continue
+		}
+
+		contentType := fileContentType(fileHeader)
+		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
+			BucketName:  bucketName,
+			Key:         targetKey,
+			ContentType: contentType,
+			Content:     file,
+			Size:        fileHeader.Size,
+		})
+		_ = file.Close()
+		if uploadErr != nil {
+			results = append(results, uploadObjectItemResult{
+				FileName: fileName,
+				Key:      targetKey,
+				Result:   "failure",
+				Reason:   uploadErr.Error(),
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
+				"error":    uploadErr.Error(),
+				"size":     fileHeader.Size,
+				"fileName": fileName,
+			})
+			continue
+		}
+
+		successCount++
+		results = append(results, uploadObjectItemResult{
+			FileName: fileName,
+			Key:      targetKey,
+			Result:   "success",
+		})
+		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultSuccess, gin.H{
+			"size":     fileHeader.Size,
+			"fileName": fileName,
+		})
+	}
+
+	httpresp.Success(ctx, uploadObjectResponse{
+		Message: "upload accepted",
+		Summary: uploadObjectSummary{
+			Total:   len(fileHeaders),
+			Success: successCount,
+			Failure: len(fileHeaders) - successCount,
+		},
+		Results: results,
 	})
-	httpresp.Success(ctx, gin.H{"message": "upload accepted"})
 }
 
 func (h *Handler) DownloadObject(ctx *gin.Context) {
@@ -386,6 +502,81 @@ func fileContentType(fileHeader *multipart.FileHeader) string {
 		return "application/octet-stream"
 	}
 	return contentType
+}
+
+func collectUploadFileHeaders(ctx *gin.Context) ([]*multipart.FileHeader, error) {
+	form, err := ctx.MultipartForm()
+	if err != nil {
+		return nil, uploadValidationError("invalid upload request", []uploadObjectFieldError{{
+			Field:   "files",
+			Message: "multipart form data is required",
+		}})
+	}
+	if form == nil {
+		return nil, uploadValidationError("invalid upload request", []uploadObjectFieldError{{
+			Field:   "files",
+			Message: "multipart form data is required",
+		}})
+	}
+
+	files := make([]*multipart.FileHeader, 0)
+	files = append(files, form.File["files"]...)
+	files = append(files, form.File["file"]...)
+	if len(files) == 0 {
+		return nil, uploadValidationError("file is required", []uploadObjectFieldError{{
+			Field:   "files",
+			Message: "at least one file must be provided in files or file",
+		}})
+	}
+	return files, nil
+}
+
+func resolveUploadObjectKey(fileHeader *multipart.FileHeader, key, keyPrefix string, fileCount int) (string, error) {
+	if fileCount == 1 && key != "" {
+		return key, nil
+	}
+
+	fileName := ""
+	if fileHeader != nil {
+		fileName = strings.TrimSpace(fileHeader.Filename)
+	}
+	if fileName == "" {
+		return "", uploadValidationError("object key is required", []uploadObjectFieldError{{
+			Field:   "fileName",
+			Message: "file name is required when object key is not provided",
+		}})
+	}
+
+	return joinObjectKey(keyPrefix, fileName), nil
+}
+
+func joinObjectKey(keyPrefix, fileName string) string {
+	keyPrefix = strings.TrimSpace(keyPrefix)
+	fileName = strings.TrimSpace(fileName)
+	if keyPrefix == "" {
+		return fileName
+	}
+	return strings.TrimRight(keyPrefix, "/") + "/" + fileName
+}
+
+func uploadAuditTarget(key, fileName string) string {
+	key = strings.TrimSpace(key)
+	if key != "" {
+		return key
+	}
+	fileName = strings.TrimSpace(fileName)
+	if fileName != "" {
+		return fileName
+	}
+	return "upload"
+}
+
+func uploadValidationError(message string, fields []uploadObjectFieldError) error {
+	details := gin.H{}
+	if len(fields) > 0 {
+		details["fields"] = fields
+	}
+	return httpresp.NewAppError(http.StatusBadRequest, "validation_error", message, details)
 }
 
 func objectTargetIdentifier(prefix, marker string) string {
