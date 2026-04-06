@@ -8,17 +8,26 @@ import { NotFoundPage } from '../pages/NotFoundPage'
 import { ResourcePage } from '../pages/ResourcePage'
 import { SetupPage } from '../pages/SetupPage'
 import { UnauthorizedPage } from '../pages/UnauthorizedPage'
+import { useAuthStore } from '../store/auth'
 
 export function AppRouter() {
+  const isLoggedIn = useAuthStore((state) => state.isLoggedIn)
+
   return (
     <BrowserRouter>
       <AppProviders>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/login"
+            element={isLoggedIn ? <Navigate to="/" replace /> : <LoginPage />}
+          />
           <Route path="/setup" element={<SetupPage />} />
           <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-          <Route path="/" element={<AppShell />}>
+          <Route
+            path="/"
+            element={isLoggedIn ? <AppShell /> : <Navigate to="/login" replace />}
+          >
             <Route index element={<DashboardPage />} />
             <Route
               path="projects"

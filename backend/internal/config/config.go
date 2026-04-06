@@ -48,6 +48,17 @@ type SuperAdminConfig struct {
 	Password string `yaml:"password"`
 }
 
+// CORSConfig defines cross-origin request policy.
+type CORSConfig struct {
+	Enabled          bool     `yaml:"enabled"`
+	AllowOrigins     []string `yaml:"allow_origins"`
+	AllowMethods     []string `yaml:"allow_methods"`
+	AllowHeaders     []string `yaml:"allow_headers"`
+	ExposeHeaders    []string `yaml:"expose_headers"`
+	AllowCredentials bool     `yaml:"allow_credentials"`
+	MaxAgeSeconds    int      `yaml:"max_age_seconds"`
+}
+
 // AppConfig aggregates all configurable properties.
 type AppConfig struct {
 	Server       ServerConfig     `yaml:"server"`
@@ -57,6 +68,7 @@ type AppConfig struct {
 	Session      SessionConfig    `yaml:"session"`
 	Encryption   EncryptionConfig `yaml:"encryption"`
 	SuperAdmin   SuperAdminConfig `yaml:"super_admin"`
+	CORS         CORSConfig       `yaml:"cors"`
 	RequestLimit int              `yaml:"request_limit"`
 }
 
@@ -91,6 +103,14 @@ func (c *AppConfig) Validate() error {
 		return errors.New("super admin email is required")
 	case c.SuperAdmin.Password == "":
 		return errors.New("super admin password is required")
+	case len(c.CORS.AllowOrigins) == 0:
+		return errors.New("cors allow_origins is required")
+	case len(c.CORS.AllowMethods) == 0:
+		return errors.New("cors allow_methods is required")
+	case len(c.CORS.AllowHeaders) == 0:
+		return errors.New("cors allow_headers is required")
+	case c.CORS.MaxAgeSeconds < 0:
+		return errors.New("cors max_age_seconds must be greater than or equal to 0")
 	case c.RequestLimit <= 0:
 		return errors.New("request limit must be positive")
 	}

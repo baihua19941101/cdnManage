@@ -21,10 +21,11 @@ type projectScopeMiddleware interface {
 	Middleware() gin.HandlerFunc
 }
 
-func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, auditHandler *audithandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *gin.Engine {
+func NewRouter(cfg *config.AppConfig, authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, auditHandler *audithandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *gin.Engine {
 	router := gin.New()
 
 	router.Use(
+		middleware.CORS(cfg.CORS),
 		middleware.RequestID(),
 		middleware.Recovery(),
 		middleware.ErrorHandler(),
@@ -53,6 +54,6 @@ func NewRouter(authHandler *authhandler.Handler, userHandler *userhandler.Handle
 func NewServer(cfg *config.AppConfig, authHandler *authhandler.Handler, userHandler *userhandler.Handler, projectHandler *projecthandler.Handler, storageHandler *storagehandler.Handler, auditHandler *audithandler.Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) *http.Server {
 	return &http.Server{
 		Addr:    ":" + strconv.Itoa(cfg.Server.Port),
-		Handler: NewRouter(authHandler, userHandler, projectHandler, storageHandler, auditHandler, authenticator, projectScope),
+		Handler: NewRouter(cfg, authHandler, userHandler, projectHandler, storageHandler, auditHandler, authenticator, projectScope),
 	}
 }

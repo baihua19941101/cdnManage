@@ -1,33 +1,84 @@
+# HTTP 服务监听端口
 server:
   port: 8080
 
+# MySQL 连接配置（业务真值数据存储）
 mysql:
+  # 数据库地址，容器场景可改为服务名
   host: 127.0.0.1
   port: 3306
+  # 连接账号
   user: root
+  # 连接密码
   password: 123456
+  # 业务数据库名
   database: cdn_manage
+  # 连接池上限
   max_open_conns: 20
+  # 空闲连接上限
   max_idle_conns: 5
 
+# Redis 连接配置（缓存与短时状态）
 redis:
   host: 127.0.0.1
   port: 6379
+  # 无密码可留空字符串
   password: ""
 
+# JWT 签发配置（用于 Bearer Token 鉴权）
 jwt:
+  # 生产环境必须替换为高强度随机密钥
   secret: replace-with-strong-secret
+  # token issuer 声明
   issuer: cdn-management-platform
+  # token 有效期（秒）
   lifespan_seconds: 3600
 
+# 会话签名密钥（即使当前以 JWT 为主，也建议独立配置）
 session:
+  # 生产环境必须替换
   secret: replace-with-session-secret
 
+# 敏感数据加解密密钥（如存储桶凭证）
 encryption:
+  # 需要 32 字节密钥，生产环境必须替换
   key: replace-with-32-byte-key
 
+# 首次启动自动创建超级管理员账号（仅在空库时生效）
 super_admin:
   email: admin@example.com
+  # 首次登录后请立即修改
   password: ChangeMe123!
 
+# CORS 跨域配置（前后端分离开发必须配置）
+cors:
+  # 是否启用 CORS 处理
+  enabled: true
+  # 允许访问的前端源（协议+域名+端口）
+  allow_origins:
+    - http://127.0.0.1:5173
+    - http://localhost:5173
+  # 允许的请求方法
+  allow_methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  # 允许的请求头（包含 Authorization 才能带 Bearer Token）
+  allow_headers:
+    - Authorization
+    - Content-Type
+    - X-Requested-With
+    - X-Request-ID
+  # 暴露给浏览器的响应头
+  expose_headers:
+    - X-Request-ID
+  # 是否允许携带凭证（Cookie/认证信息）
+  allow_credentials: true
+  # 预检请求缓存时长（秒），0 表示不缓存
+  max_age_seconds: 600
+
+# 通用请求限流阈值（当前中间件策略会读取此值）
 request_limit: 100
