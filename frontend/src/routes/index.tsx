@@ -5,6 +5,7 @@ import { AppShell } from '../layouts/AppShell'
 import { DashboardPage } from '../pages/DashboardPage'
 import { LoginPage } from '../pages/LoginPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
+import { ProjectsPage } from '../pages/ProjectsPage'
 import { ResourcePage } from '../pages/ResourcePage'
 import { SetupPage } from '../pages/SetupPage'
 import { UnauthorizedPage } from '../pages/UnauthorizedPage'
@@ -29,15 +30,7 @@ export function AppRouter() {
             element={isLoggedIn ? <AppShell /> : <Navigate to="/login" replace />}
           >
             <Route index element={<DashboardPage />} />
-            <Route
-              path="projects"
-              element={
-                <ResourcePage
-                  title="Projects"
-                  description="Project list, detail and configuration views will land in task 11.1."
-                />
-              }
-            />
+            <Route path="projects" element={<ProjectsPage />} />
             <Route
               path="users"
               element={
