@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import type { ReactElement } from 'react'
 
 import { AppProviders } from '../app/AppProviders'
 import { AppShell } from '../layouts/AppShell'
@@ -10,7 +11,16 @@ import { ResourcePage } from '../pages/ResourcePage'
 import { SetupPage } from '../pages/SetupPage'
 import { UnauthorizedPage } from '../pages/UnauthorizedPage'
 import { UsersPage } from '../pages/UsersPage'
-import { useAuthStore } from '../store/auth'
+import { isPlatformAdminRole, useAuthStore } from '../store/auth'
+
+type PlatformAdminRouteProps = {
+  children: ReactElement
+}
+
+function PlatformAdminRoute({ children }: PlatformAdminRouteProps) {
+  const role = useAuthStore((state) => state.user?.platformRole)
+  return isPlatformAdminRole(role) ? children : <Navigate to="/unauthorized" replace />
+}
 
 export function AppRouter() {
   const isLoggedIn = useAuthStore((state) => state.isLoggedIn)
@@ -31,8 +41,22 @@ export function AppRouter() {
             element={isLoggedIn ? <AppShell /> : <Navigate to="/login" replace />}
           >
             <Route index element={<DashboardPage />} />
-            <Route path="projects" element={<ProjectsPage />} />
-            <Route path="users" element={<UsersPage />} />
+            <Route
+              path="projects"
+              element={
+                <PlatformAdminRoute>
+                  <ProjectsPage />
+                </PlatformAdminRoute>
+              }
+            />
+            <Route
+              path="users"
+              element={
+                <PlatformAdminRoute>
+                  <UsersPage />
+                </PlatformAdminRoute>
+              }
+            />
             <Route
               path="storage"
               element={

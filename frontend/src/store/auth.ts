@@ -10,6 +10,9 @@ export type AuthUser = {
   status: UserStatus
 }
 
+export const isPlatformAdminRole = (role: PlatformRole | null | undefined) =>
+  role === 'super_admin' || role === 'platform_admin'
+
 type AuthSessionPayload = {
   token: string | null
   user: AuthUser | null
