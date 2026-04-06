@@ -3,12 +3,12 @@ import type { ReactElement } from 'react'
 
 import { AppProviders } from '../app/AppProviders'
 import { AppShell } from '../layouts/AppShell'
+import { AuditsPage } from '../pages/AuditsPage'
 import { CDNPage } from '../pages/CDNPage'
 import { DashboardPage } from '../pages/DashboardPage'
 import { LoginPage } from '../pages/LoginPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { ProjectsPage } from '../pages/ProjectsPage'
-import { ResourcePage } from '../pages/ResourcePage'
 import { SetupPage } from '../pages/SetupPage'
 import { StoragePage } from '../pages/StoragePage'
 import { UnauthorizedPage } from '../pages/UnauthorizedPage'
@@ -61,15 +61,7 @@ export function AppRouter() {
             />
             <Route path="storage" element={<StoragePage />} />
             <Route path="cdn" element={<CDNPage />} />
-            <Route
-              path="audits"
-              element={
-                <ResourcePage
-                  title="Audits"
-                  description="Platform and project audit search pages will land in task 12.3."
-                />
-              }
-            />
+            <Route path="audits" element={<AuditsPage />} />
           </Route>
 
           <Route path="/home" element={<Navigate to="/" replace />} />
