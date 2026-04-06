@@ -25,6 +25,7 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type ProviderType = 'aliyun' | 'tencent_cloud' | 'huawei_cloud' | 'qiniu'
 type PurgeScope = 'url' | 'directory'
@@ -120,6 +121,8 @@ const resolveErrorMessage = (error: unknown, fallback: string) => {
 }
 
 export function ProjectsPage() {
+  const platformRole = useAuthStore((state) => state.user?.platformRole)
+  const canWrite = isPlatformAdminRole(platformRole)
   const [messageApi, messageContext] = message.useMessage()
   const [form] = Form.useForm<EditProjectFormValues>()
   const [projects, setProjects] = useState<Project[]>([])
@@ -186,7 +189,7 @@ export function ProjectsPage() {
   }, [selectedProjectId])
 
   const openEditModal = () => {
-    if (!selectedProject) {
+    if (!selectedProject || !canWrite) {
       return
     }
 
@@ -213,7 +216,7 @@ export function ProjectsPage() {
   }
 
   const submitEdit = async () => {
-    if (!selectedProjectId) {
+    if (!selectedProjectId || !canWrite) {
       return
     }
 
@@ -331,12 +334,20 @@ export function ProjectsPage() {
               type="primary"
               icon={<EditOutlined />}
               onClick={openEditModal}
-              disabled={!selectedProject}
+              disabled={!selectedProject || !canWrite}
             >
               编辑项目
             </Button>
           }
         >
+          {!canWrite ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="当前账号为只读权限，项目写操作入口已禁用。"
+            />
+          ) : null}
           {loadingDetail ? (
             <Spin />
           ) : detailError ? (
@@ -433,7 +444,7 @@ export function ProjectsPage() {
         open={editVisible}
         onCancel={() => setEditVisible(false)}
         onOk={() => void submitEdit()}
-        okButtonProps={{ loading: submitting }}
+        okButtonProps={{ loading: submitting, disabled: !canWrite }}
         width={900}
         destroyOnHidden
       >

@@ -25,6 +25,7 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type UserStatus = 'active' | 'disabled'
 type PlatformRole = 'super_admin' | 'platform_admin' | 'standard_user'
@@ -111,6 +112,8 @@ const resolveErrorMessage = (error: unknown, fallback: string) => {
 }
 
 export function UsersPage() {
+  const platformRole = useAuthStore((state) => state.user?.platformRole)
+  const canWrite = isPlatformAdminRole(platformRole)
   const [messageApi, messageContext] = message.useMessage()
   const [createForm] = Form.useForm<CreateUserFormValues>()
   const [editForm] = Form.useForm<EditUserFormValues>()
@@ -163,6 +166,9 @@ export function UsersPage() {
   }
 
   const submitCreate = async () => {
+    if (!canWrite) {
+      return
+    }
     const values = await createForm.validateFields()
     setSubmitting(true)
     try {
@@ -189,7 +195,7 @@ export function UsersPage() {
   }
 
   const submitEdit = async () => {
-    if (!activeUser) {
+    if (!activeUser || !canWrite) {
       return
     }
     const values = await editForm.validateFields()
@@ -207,6 +213,9 @@ export function UsersPage() {
   }
 
   const disableUser = async (user: User) => {
+    if (!canWrite) {
+      return
+    }
     setSubmitting(true)
     try {
       await apiClient.put(`/users/${user.id}`, {
@@ -231,7 +240,7 @@ export function UsersPage() {
   }
 
   const submitBindings = async () => {
-    if (!activeUser) {
+    if (!activeUser || !canWrite) {
       return
     }
     const values = await bindingForm.validateFields()
@@ -278,19 +287,23 @@ export function UsersPage() {
       width: 320,
       render: (_, record) => (
         <Space>
-          <Button icon={<EditOutlined />} onClick={() => openEdit(record)}>
+          <Button icon={<EditOutlined />} onClick={() => openEdit(record)} disabled={!canWrite}>
             编辑
           </Button>
-          <Button icon={<TeamOutlined />} onClick={() => openBindings(record)}>
+          <Button icon={<TeamOutlined />} onClick={() => openBindings(record)} disabled={!canWrite}>
             项目角色绑定
           </Button>
           <Popconfirm
             title="确认禁用该用户？"
             onConfirm={() => void disableUser(record)}
             okButtonProps={{ loading: submitting }}
-            disabled={record.status === 'disabled'}
+            disabled={!canWrite || record.status === 'disabled'}
           >
-            <Button danger icon={<StopOutlined />} disabled={record.status === 'disabled'}>
+            <Button
+              danger
+              icon={<StopOutlined />}
+              disabled={!canWrite || record.status === 'disabled'}
+            >
               禁用
             </Button>
           </Popconfirm>
@@ -309,12 +322,25 @@ export function UsersPage() {
             <Button icon={<ReloadOutlined />} onClick={() => void fetchUsers()}>
               刷新
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={openCreate}
+              disabled={!canWrite}
+            >
               新建用户
             </Button>
           </Space>
         }
       >
+        {!canWrite ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="当前账号为只读权限，用户写操作入口已禁用。"
+          />
+        ) : null}
         {error ? (
           <Alert type="error" showIcon message={error} />
         ) : (
@@ -327,7 +353,7 @@ export function UsersPage() {
         open={createVisible}
         onCancel={() => setCreateVisible(false)}
         onOk={() => void submitCreate()}
-        okButtonProps={{ loading: submitting }}
+        okButtonProps={{ loading: submitting, disabled: !canWrite }}
         destroyOnHidden
       >
         <Form<CreateUserFormValues> form={createForm} layout="vertical">
@@ -368,7 +394,7 @@ export function UsersPage() {
         open={editVisible}
         onCancel={() => setEditVisible(false)}
         onOk={() => void submitEdit()}
-        okButtonProps={{ loading: submitting }}
+        okButtonProps={{ loading: submitting, disabled: !canWrite }}
         destroyOnHidden
       >
         <Form<EditUserFormValues> form={editForm} layout="vertical">
@@ -399,7 +425,7 @@ export function UsersPage() {
         open={bindingVisible}
         onCancel={() => setBindingVisible(false)}
         onOk={() => void submitBindings()}
-        okButtonProps={{ loading: submitting }}
+        okButtonProps={{ loading: submitting, disabled: !canWrite }}
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
@@ -415,7 +441,12 @@ export function UsersPage() {
                     size="small"
                     title={`绑定 #${index + 1}`}
                     extra={
-                      <Button danger type="link" onClick={() => remove(field.name)}>
+                      <Button
+                        danger
+                        type="link"
+                        onClick={() => remove(field.name)}
+                        disabled={!canWrite}
+                      >
                         删除
                       </Button>
                     }
@@ -443,7 +474,7 @@ export function UsersPage() {
                     </Form.Item>
                   </Card>
                 ))}
-                <Button type="dashed" onClick={() => add()}>
+                <Button type="dashed" onClick={() => add()} disabled={!canWrite}>
                   添加项目角色绑定
                 </Button>
               </Space>
@@ -454,4 +485,3 @@ export function UsersPage() {
     </>
   )
 }
-
