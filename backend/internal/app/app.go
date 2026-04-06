@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
 	"github.com/baihua19941101/cdnManage/internal/infra/secure"
 	"github.com/baihua19941101/cdnManage/internal/middleware"
+	"github.com/baihua19941101/cdnManage/internal/provider"
 	"github.com/baihua19941101/cdnManage/internal/repository"
 	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
@@ -78,6 +80,12 @@ func New() (*Application, error) {
 		txManager,
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
+	if err := projectService.RegisterObjectStorageProvider(provider.NewTencentCOSProvider()); err != nil {
+		return nil, fmt.Errorf("register tencent cos provider: %w", err)
+	}
+	if err := projectService.RegisterCDNProvider(provider.NewTencentCDNProvider()); err != nil {
+		return nil, fmt.Errorf("register tencent cdn provider: %w", err)
+	}
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
