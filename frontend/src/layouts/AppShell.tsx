@@ -7,22 +7,73 @@ import {
   HighlightOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
-import { Layout, Menu, Segmented, Space, Tag, Typography } from 'antd'
+import { Button, Layout, Menu, Segmented, Space, Tag, Typography } from 'antd'
 import type { ItemType } from 'antd/es/menu/interface'
+import { useEffect, useMemo, type ReactNode } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { themePresets, type ThemeMode } from '../app/themes'
 import { useShellStore } from '../store/shell'
+import { useAuthStore, type PlatformRole } from '../store/auth'
 
 const { Content, Footer, Header, Sider } = Layout
 
-const menuItems: ItemType[] = [
-  { key: '/', icon: <DeploymentUnitOutlined />, label: 'Overview' },
-  { key: '/projects', icon: <FolderOpenOutlined />, label: 'Projects' },
-  { key: '/users', icon: <TeamOutlined />, label: 'Users' },
-  { key: '/storage', icon: <DatabaseOutlined />, label: 'Storage' },
-  { key: '/cdn', icon: <CloudServerOutlined />, label: 'CDN' },
-  { key: '/audits', icon: <FileSearchOutlined />, label: 'Audits' },
+type ShellNavigationItem = {
+  key: string
+  icon: ReactNode
+  label: string
+  allowedRoles: PlatformRole[]
+}
+
+const roleLabels: Record<PlatformRole, string> = {
+  super_admin: 'Super Admin',
+  platform_admin: 'Platform Admin',
+  standard_user: 'Standard User',
+}
+
+const roleTagColors: Record<PlatformRole, string> = {
+  super_admin: 'magenta',
+  platform_admin: 'geekblue',
+  standard_user: 'cyan',
+}
+
+const navigationItems: ShellNavigationItem[] = [
+  {
+    key: '/',
+    icon: <DeploymentUnitOutlined />,
+    label: 'Overview',
+    allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
+  },
+  {
+    key: '/projects',
+    icon: <FolderOpenOutlined />,
+    label: 'Projects',
+    allowedRoles: ['super_admin', 'platform_admin'],
+  },
+  {
+    key: '/users',
+    icon: <TeamOutlined />,
+    label: 'Users',
+    allowedRoles: ['super_admin', 'platform_admin'],
+  },
+  {
+    key: '/storage',
+    icon: <DatabaseOutlined />,
+    label: 'Storage',
+    allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
+  },
+  {
+    key: '/cdn',
+    icon: <CloudServerOutlined />,
+    label: 'CDN',
+    allowedRoles: ['super_admin', 'platform_admin'],
+  },
+  {
+    key: '/audits',
+    icon: <FileSearchOutlined />,
+    label: 'Audits',
+    allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
+  },
 ]
 
 export function AppShell() {
@@ -32,6 +83,45 @@ export function AppShell() {
   const themeMode = useShellStore((state) => state.themeMode)
   const setCollapsed = useShellStore((state) => state.setCollapsed)
   const setThemeMode = useShellStore((state) => state.setThemeMode)
+  const user = useAuthStore((state) => state.user)
+  const clearSession = useAuthStore((state) => state.clearSession)
+
+  const platformRole: PlatformRole = user?.platformRole ?? 'standard_user'
+  const userEmail = user?.email ?? 'unknown@cdnmanage.local'
+
+  const accessibleNavigationItems = useMemo(
+    () => navigationItems.filter((item) => item.allowedRoles.includes(platformRole)),
+    [platformRole],
+  )
+  const menuItems = useMemo<ItemType[]>(
+    () =>
+      accessibleNavigationItems.map((item) => ({
+        key: item.key,
+        icon: item.icon,
+        label: item.label,
+      })),
+    [accessibleNavigationItems],
+  )
+  const selectedMenuKey =
+    location.pathname === '/' ? '/' : `/${location.pathname.split('/')[1]}`
+  const fallbackPath = accessibleNavigationItems[0]?.key
+  const hasAccessToCurrentPath = accessibleNavigationItems.some(
+    (item) => item.key === selectedMenuKey,
+  )
+
+  useEffect(() => {
+    if (!fallbackPath) {
+      return
+    }
+    if (!hasAccessToCurrentPath) {
+      navigate(fallbackPath, { replace: true })
+    }
+  }, [fallbackPath, hasAccessToCurrentPath, navigate])
+
+  const handleLogout = () => {
+    clearSession()
+    navigate('/login', { replace: true })
+  }
 
   const shellBackdrop =
     themeMode === 'light'
@@ -75,9 +165,9 @@ export function AppShell() {
         </div>
         <Menu
           mode="inline"
-          selectedKeys={[location.pathname === '/' ? '/' : `/${location.pathname.split('/')[1]}`]}
+          selectedKeys={[selectedMenuKey]}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => navigate(String(key))}
           style={{ background: 'transparent', borderInlineEnd: 'none' }}
         />
       </Sider>
@@ -121,6 +211,11 @@ export function AppShell() {
                 onChange={(value) => setThemeMode(value)}
               />
             </Space>
+            <Space size="small">
+              <Typography.Text style={{ color: '#d7edf5' }}>{userEmail}</Typography.Text>
+              <Tag color={roleTagColors[platformRole]}>{roleLabels[platformRole]}</Tag>
+            </Space>
+            <Button onClick={handleLogout}>退出登录</Button>
             <Tag color="cyan">React</Tag>
             <Tag color="geekblue">TypeScript</Tag>
             <Tag color="gold">Ant Design</Tag>
