@@ -10,10 +10,10 @@ import {
   Typography,
   message,
 } from 'antd'
-import axios from 'axios'
 import { useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { resolveAPIErrorMessage } from '../services/api/error'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type ApiResponse<T> = {
@@ -48,23 +48,6 @@ type DirectoryRefreshFormValues = {
 type SyncFormValues = {
   bucketName: string
   paths: string
-}
-
-const resolveErrorMessage = (error: unknown, fallback: string) => {
-  if (!axios.isAxiosError(error)) {
-    return fallback
-  }
-  const payload = error.response?.data
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'message' in payload &&
-    typeof payload.message === 'string' &&
-    payload.message.trim().length > 0
-  ) {
-    return payload.message
-  }
-  return fallback
 }
 
 const splitByLines = (value: string) =>
@@ -181,7 +164,7 @@ export function CDNPage() {
       setURLResult(response.data.data ?? null)
       messageApi.success('URL 刷新请求已提交。')
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, 'URL 刷新请求提交失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, 'URL 刷新请求提交失败。'))
     } finally {
       setURLSubmitting(false)
     }
@@ -215,7 +198,7 @@ export function CDNPage() {
       setDirectoryResult(response.data.data ?? null)
       messageApi.success('目录刷新请求已提交。')
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '目录刷新请求提交失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '目录刷新请求提交失败。'))
     } finally {
       setDirectorySubmitting(false)
     }
@@ -250,7 +233,7 @@ export function CDNPage() {
       setSyncResult(response.data.data ?? null)
       messageApi.success('资源同步请求已提交。')
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '资源同步请求提交失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '资源同步请求提交失败。'))
     } finally {
       setSyncSubmitting(false)
     }

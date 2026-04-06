@@ -24,10 +24,10 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { UploadFile } from 'antd/es/upload/interface'
-import axios from 'axios'
 import { useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { resolveAPIErrorMessage } from '../services/api/error'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type ObjectItem = {
@@ -65,23 +65,6 @@ type QueryFormValues = {
 
 type RenameFormValues = {
   targetKey: string
-}
-
-const resolveErrorMessage = (error: unknown, fallback: string) => {
-  if (!axios.isAxiosError(error)) {
-    return fallback
-  }
-  const payload = error.response?.data
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'message' in payload &&
-    typeof payload.message === 'string' &&
-    payload.message.trim().length > 0
-  ) {
-    return payload.message
-  }
-  return fallback
 }
 
 export function StoragePage() {
@@ -138,7 +121,7 @@ export function StoragePage() {
       )
       setObjects(response.data.data?.objects ?? [])
     } catch (error) {
-      setQueryError(resolveErrorMessage(error, '对象列表加载失败。'))
+      setQueryError(resolveAPIErrorMessage(error, '对象列表加载失败。'))
       setObjects([])
     } finally {
       setLoading(false)
@@ -176,7 +159,7 @@ export function StoragePage() {
       setUploadKey('')
       await queryObjects()
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '上传失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '上传失败。'))
     } finally {
       setSubmitting(false)
     }
@@ -203,7 +186,7 @@ export function StoragePage() {
       anchor.remove()
       window.URL.revokeObjectURL(url)
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '下载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '下载失败。'))
     }
   }
 
@@ -225,7 +208,7 @@ export function StoragePage() {
       messageApi.success('删除成功。')
       await queryObjects()
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '删除失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '删除失败。'))
     } finally {
       setSubmitting(false)
     }
@@ -262,7 +245,7 @@ export function StoragePage() {
       setRenameVisible(false)
       await queryObjects()
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '重命名失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '重命名失败。'))
     } finally {
       setSubmitting(false)
     }
@@ -285,7 +268,7 @@ export function StoragePage() {
       )
       setAuditLogs(response.data.data?.logs ?? [])
     } catch (error) {
-      messageApi.error(resolveErrorMessage(error, '审计日志查询失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, '审计日志查询失败。'))
       setAuditLogs([])
     } finally {
       setAuditLoading(false)

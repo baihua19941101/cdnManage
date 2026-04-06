@@ -16,10 +16,10 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import axios from 'axios'
 import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
+import { resolveAPIErrorMessage } from '../services/api/error'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type QueryScope = 'platform' | 'project'
@@ -58,23 +58,6 @@ type QueryFormValues = {
   actorUserId?: string
   limit: number
   offset: number
-}
-
-const resolveErrorMessage = (error: unknown, fallback: string) => {
-  if (!axios.isAxiosError(error)) {
-    return fallback
-  }
-  const payload = error.response?.data
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'message' in payload &&
-    typeof payload.message === 'string' &&
-    payload.message.trim().length > 0
-  ) {
-    return payload.message
-  }
-  return fallback
 }
 
 const buildQueryParams = (values: QueryFormValues, includeActorUserId: boolean) => {
@@ -174,7 +157,7 @@ export function AuditsPage() {
       setLogs(Array.isArray(response.data.data?.logs) ? response.data.data.logs : [])
     } catch (error) {
       setLogs([])
-      setQueryError(resolveErrorMessage(error, '审计日志查询失败，请稍后重试。'))
+      setQueryError(resolveAPIErrorMessage(error, '审计日志查询失败，请稍后重试。'))
     } finally {
       setLoading(false)
     }
