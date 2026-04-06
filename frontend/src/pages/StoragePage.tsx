@@ -92,7 +92,7 @@ export function StoragePage() {
   const [submitting, setSubmitting] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
 
-  const [selectedFile, setSelectedFile] = useState<UploadFile | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploadKey, setUploadKey] = useState('')
 
   const [renameVisible, setRenameVisible] = useState(false)
@@ -196,7 +196,7 @@ export function StoragePage() {
       messageApi.error('请先填写并查询 Project ID 与 BucketName。')
       return
     }
-    if (!selectedFile || !selectedFile.originFileObj) {
+    if (!selectedFile) {
       messageApi.error('请选择待上传文件。')
       return
     }
@@ -206,7 +206,7 @@ export function StoragePage() {
     if (uploadKey.trim()) {
       formData.append('key', uploadKey.trim())
     }
-    formData.append('file', selectedFile.originFileObj)
+    formData.append('file', selectedFile)
 
     setSubmitting(true)
     try {
@@ -492,12 +492,25 @@ export function StoragePage() {
             <Space>
               <Upload
                 beforeUpload={(file) => {
-                  setSelectedFile(file as unknown as UploadFile)
+                  setSelectedFile(file)
                   return false
+                }}
+                onRemove={() => {
+                  setSelectedFile(null)
                 }}
                 maxCount={1}
                 showUploadList={!!selectedFile}
-                fileList={selectedFile ? [selectedFile] : []}
+                fileList={
+                  selectedFile
+                    ? [
+                        {
+                          uid: `${selectedFile.name}-${selectedFile.lastModified}`,
+                          name: selectedFile.name,
+                          status: 'done',
+                        } satisfies UploadFile,
+                      ]
+                    : []
+                }
               >
                 <Button icon={<UploadOutlined />} disabled={!canWrite}>
                   选择文件
