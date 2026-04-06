@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { render, waitFor } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { AppProviders } from './AppProviders'
 import { useShellStore } from '../store/shell'
