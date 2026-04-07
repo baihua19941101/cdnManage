@@ -145,10 +145,13 @@ type batchDeleteObjectRequest struct {
 }
 
 type batchDeleteObjectItemResult struct {
-	Key       string `json:"key"`
-	Result    string `json:"result"`
-	ErrorCode string `json:"errorCode,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	Key            string `json:"key"`
+	TargetType     string `json:"targetType,omitempty"`
+	Result         string `json:"result"`
+	DeletedObjects int    `json:"deletedObjects,omitempty"`
+	FailedObjects  int    `json:"failedObjects,omitempty"`
+	ErrorCode      string `json:"errorCode,omitempty"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 type batchDeleteObjectSummary struct {
@@ -161,6 +164,11 @@ type batchDeleteObjectResponse struct {
 	Message string                        `json:"message"`
 	Summary batchDeleteObjectSummary      `json:"summary"`
 	Results []batchDeleteObjectItemResult `json:"results"`
+}
+
+type deleteObjectResponse struct {
+	Message string                       `json:"message"`
+	Summary batchDeleteObjectItemResult  `json:"summary"`
 }
 
 func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64) *Handler {
@@ -615,7 +623,7 @@ func (h *Handler) DeleteObject(ctx *gin.Context) {
 		return
 	}
 
-	err = h.projectService.DeleteBucketObject(ctx.Request.Context(), projectID, serviceprojects.DeleteBucketObjectInput{
+	result, err := h.projectService.DeleteBucketObjectWithResult(ctx.Request.Context(), projectID, serviceprojects.DeleteBucketObjectInput{
 		BucketName: ctx.Query("bucketName"),
 		Key:        key,
 	})
@@ -625,8 +633,34 @@ func (h *Handler) DeleteObject(ctx *gin.Context) {
 		return
 	}
 
-	h.recordAudit(ctx, projectID, "object.delete", "object", key, model.AuditResultSuccess, nil)
-	httpresp.Success(ctx, gin.H{"message": "object deleted"})
+	if result.Success {
+		h.recordAudit(ctx, projectID, "object.delete", "object", key, model.AuditResultSuccess, gin.H{
+			"targetType":     result.TargetType,
+			"deletedObjects": result.DeletedObjects,
+			"failedObjects":  result.FailedObjects,
+		})
+	} else {
+		h.recordAudit(ctx, projectID, "object.delete", "object", key, model.AuditResultFailure, gin.H{
+			"targetType":     result.TargetType,
+			"deletedObjects": result.DeletedObjects,
+			"failedObjects":  result.FailedObjects,
+			"errorCode":      result.ErrorCode,
+			"error":          result.Message,
+		})
+	}
+
+	httpresp.Success(ctx, deleteObjectResponse{
+		Message: result.Message,
+		Summary: batchDeleteObjectItemResult{
+			Key:            result.Key,
+			TargetType:     result.TargetType,
+			Result:         map[bool]string{true: "success", false: "failure"}[result.Success],
+			DeletedObjects: result.DeletedObjects,
+			FailedObjects:  result.FailedObjects,
+			ErrorCode:      result.ErrorCode,
+			Reason:         result.Message,
+		},
+	})
 }
 
 func (h *Handler) BatchDeleteObjects(ctx *gin.Context) {
@@ -658,8 +692,11 @@ func (h *Handler) BatchDeleteObjects(ctx *gin.Context) {
 		if item.Success {
 			summary.Success++
 			results = append(results, batchDeleteObjectItemResult{
-				Key:    item.Key,
-				Result: "success",
+				Key:            item.Key,
+				TargetType:     item.TargetType,
+				Result:         "success",
+				DeletedObjects: item.DeletedObjects,
+				FailedObjects:  item.FailedObjects,
 			})
 			h.recordAudit(ctx, projectID, "object.delete", "object", item.Key, model.AuditResultSuccess, gin.H{
 				"batch": true,
@@ -669,10 +706,13 @@ func (h *Handler) BatchDeleteObjects(ctx *gin.Context) {
 
 		summary.Failure++
 		results = append(results, batchDeleteObjectItemResult{
-			Key:       item.Key,
-			Result:    "failure",
-			ErrorCode: item.ErrorCode,
-			Reason:    item.Message,
+			Key:            item.Key,
+			TargetType:     item.TargetType,
+			Result:         "failure",
+			DeletedObjects: item.DeletedObjects,
+			FailedObjects:  item.FailedObjects,
+			ErrorCode:      item.ErrorCode,
+			Reason:         item.Message,
 		})
 		h.recordAudit(ctx, projectID, "object.delete", "object", item.Key, model.AuditResultFailure, gin.H{
 			"batch":     true,

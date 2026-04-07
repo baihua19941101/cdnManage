@@ -96,7 +96,10 @@ type DeleteBucketObjectsInput struct {
 
 type DeleteBucketObjectResult struct {
 	Key       string
+	TargetType string
 	Success   bool
+	DeletedObjects int
+	FailedObjects  int
 	ErrorCode string
 	Message   string
 }
@@ -357,16 +360,26 @@ func (s *Service) DownloadBucketObject(ctx context.Context, projectID uint64, in
 }
 
 func (s *Service) DeleteBucketObject(ctx context.Context, projectID uint64, input DeleteBucketObjectInput) error {
+	_, err := s.DeleteBucketObjectWithResult(ctx, projectID, input)
+	return err
+}
+
+func (s *Service) DeleteBucketObjectWithResult(ctx context.Context, projectID uint64, input DeleteBucketObjectInput) (DeleteBucketObjectResult, error) {
 	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
 	if err != nil {
-		return err
+		return DeleteBucketObjectResult{}, err
 	}
 	key := strings.TrimSpace(input.Key)
 	if key == "" {
-		return httpresp.NewAppError(400, "validation_error", "object key is required", nil)
+		return DeleteBucketObjectResult{}, httpresp.NewAppError(400, "validation_error", "object key is required", nil)
 	}
 	if strings.HasSuffix(key, "/") {
-		return httpresp.NewAppError(400, "directory_delete_not_supported", "directory delete is not supported", nil)
+		return s.deleteDirectoryRecursively(ctx, storageProvider, provider.DeleteObjectRequest{
+			Bucket:     bucket.BucketName,
+			Region:     bucket.Region,
+			Key:        key,
+			Credential: credentialPayload,
+		}), nil
 	}
 
 	if err := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
@@ -375,9 +388,106 @@ func (s *Service) DeleteBucketObject(ctx context.Context, projectID uint64, inpu
 		Key:        key,
 		Credential: credentialPayload,
 	}); err != nil {
-		return mapObjectStorageOperationError(err, "delete")
+		return DeleteBucketObjectResult{}, mapObjectStorageOperationError(err, "delete")
 	}
-	return nil
+	return DeleteBucketObjectResult{
+		Key:           key,
+		TargetType:    "file",
+		Success:       true,
+		DeletedObjects: 1,
+		Message:       "object deleted",
+	}, nil
+}
+
+func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvider provider.ObjectStorageProvider, request provider.DeleteObjectRequest) DeleteBucketObjectResult {
+	prefix := strings.TrimSpace(request.Key)
+	result := DeleteBucketObjectResult{
+		Key:        prefix,
+		TargetType: "directory",
+		Success:    true,
+	}
+
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	queue := []string{prefix}
+	visited := make(map[string]struct{}, 8)
+	failureReasons := make([]string, 0, 3)
+	const maxKeys = 200
+
+	for len(queue) > 0 {
+		currentPrefix := queue[0]
+		queue = queue[1:]
+		if _, ok := visited[currentPrefix]; ok {
+			continue
+		}
+		visited[currentPrefix] = struct{}{}
+
+		marker := ""
+		for {
+			objects, err := storageProvider.ListObjects(ctx, provider.ListObjectsRequest{
+				Bucket:     request.Bucket,
+				Region:     request.Region,
+				Prefix:     currentPrefix,
+				Marker:     marker,
+				MaxKeys:    maxKeys,
+				Credential: request.Credential,
+			})
+			if err != nil {
+				result.Success = false
+				result.ErrorCode = "provider_operation_failed"
+				result.Message = mapObjectStorageListError(err).Error()
+				return result
+			}
+			if len(objects) == 0 {
+				break
+			}
+
+			lastMarker := marker
+			for _, object := range objects {
+				lastMarker = object.Key
+				if object.IsDir {
+					normalized := strings.TrimSpace(object.Key)
+					if normalized != "" {
+						queue = append(queue, normalized)
+					}
+					continue
+				}
+				err = storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+					Bucket:     request.Bucket,
+					Region:     request.Region,
+					Key:        object.Key,
+					Credential: request.Credential,
+				})
+				if err != nil {
+					result.Success = false
+					result.FailedObjects++
+					if len(failureReasons) < 3 {
+						failureReasons = append(failureReasons, object.Key+": "+mapObjectStorageOperationError(err, "delete").Error())
+					}
+					continue
+				}
+				result.DeletedObjects++
+			}
+
+			if len(objects) < maxKeys || strings.TrimSpace(lastMarker) == "" || lastMarker == marker {
+				break
+			}
+			marker = lastMarker
+		}
+	}
+
+	if !result.Success {
+		if len(failureReasons) > 0 {
+			result.Message = "directory delete partially failed: " + strings.Join(failureReasons, "; ")
+		} else {
+			result.Message = "directory delete partially failed"
+		}
+		return result
+	}
+	result.Message = "directory deleted"
+	return result
 }
 
 func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, input DeleteBucketObjectsInput) ([]DeleteBucketObjectResult, error) {
@@ -395,10 +505,11 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 	for _, key := range keys {
 		if strings.HasSuffix(key, "/") {
 			results = append(results, DeleteBucketObjectResult{
-				Key:       key,
-				Success:   false,
-				ErrorCode: "directory_delete_not_supported",
-				Message:   "directory key is not supported in batch delete",
+				Key:        key,
+				TargetType: "directory",
+				Success:    false,
+				ErrorCode:  "directory_delete_not_supported",
+				Message:    "directory key is not supported in batch delete",
 			})
 			continue
 		}
@@ -412,10 +523,11 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 		if deleteErr != nil {
 			mappedErr := mapObjectStorageOperationError(deleteErr, "delete")
 			result := DeleteBucketObjectResult{
-				Key:       key,
-				Success:   false,
-				ErrorCode: "provider_operation_failed",
-				Message:   mappedErr.Error(),
+				Key:        key,
+				TargetType: "file",
+				Success:    false,
+				ErrorCode:  "provider_operation_failed",
+				Message:    mappedErr.Error(),
 			}
 			appErr := &httpresp.AppError{}
 			if errors.As(mappedErr, &appErr) {
@@ -426,9 +538,11 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 		}
 
 		results = append(results, DeleteBucketObjectResult{
-			Key:     key,
-			Success: true,
-			Message: "object deleted",
+			Key:            key,
+			TargetType:     "file",
+			Success:        true,
+			DeletedObjects: 1,
+			Message:        "object deleted",
 		})
 	}
 
