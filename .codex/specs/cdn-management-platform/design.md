@@ -177,12 +177,15 @@ RBAC 规则：
 - 文件列表查询
 - 上传、下载、删除、重命名
 - 自动识别云厂商
+- 压缩包上传会话跟踪与汇总
 
 主要接口：
 
 - `POST /api/v1/storage/connections/validate`
 - `GET /api/v1/projects/:id/storage/objects`
 - `POST /api/v1/projects/:id/storage/upload`
+- `GET /api/v1/projects/:id/storage/upload-sessions`
+- `GET /api/v1/projects/:id/storage/upload-sessions/:sessionId`
 - `GET /api/v1/projects/:id/storage/download`
 - `DELETE /api/v1/projects/:id/storage/objects`
 - `PUT /api/v1/projects/:id/storage/rename`
@@ -409,6 +412,23 @@ erDiagram
 - `metadata`
   - 保存请求摘要、错误码、对象路径、刷新路径、IP、User-Agent 等补充信息
 
+#### `upload_session`（基于审计汇总的逻辑模型）
+
+- 该模型用于表达一次压缩包上传会话的聚合信息。
+- 初版不新增独立数据库表，基于审计日志中的会话标识与元数据聚合得到。
+- 建议字段：
+  - `session_id`
+  - `project_id`
+  - `actor_user_id`
+  - `archive_name`
+  - `started_at`
+  - `finished_at`
+  - `duration_ms`
+  - `total_entries`
+  - `success_entries`
+  - `failed_entries`
+  - `status`
+
 ### Security and Secret Management
 
 敏感数据处理：
@@ -455,6 +475,8 @@ erDiagram
   - 存储桶连接校验失败
 - `PROVIDER_OPERATION_FAILED`
   - 对象存储或 CDN 厂商操作失败
+- `UPLOAD_ARCHIVE_PROCESSING_FAILED`
+  - 压缩包解析或条目处理失败
 - `RESOURCE_NOT_FOUND`
   - 项目、用户、对象、绑定配置不存在
 - `CONFLICT_ERROR`
@@ -482,6 +504,7 @@ erDiagram
 - 所有失败写操作必须记录审计日志。
 - 越权与认证失败要分别记录，便于审计分析。
 - 文件上传与同步失败时，响应中返回可追踪请求编号。
+- 压缩包上传失败时，响应中返回上传会话标识与失败条目摘要。
 
 ## Testing Strategy
 
@@ -496,6 +519,7 @@ erDiagram
 - Provider 抽象层的参数组装与错误映射
 - 审计日志写入触发条件
 - 存储桶文件操作服务逻辑
+- 压缩包上传会话聚合与耗时计算逻辑
 - CDN 刷新与资源同步编排逻辑
 
 测试层次：
@@ -515,6 +539,7 @@ erDiagram
 - 基于权限的菜单与按钮可见性
 - 项目切换后的数据隔离
 - 上传、删除、重命名、刷新等关键交互流程
+- 压缩包上传会话进展、耗时与汇总信息展示
 - 三套主题切换是否正确应用
 
 ### Integration Boundaries
@@ -547,3 +572,4 @@ erDiagram
 - Requirement 8: 由 Security and Secret Management、RBAC 与错误处理规则覆盖
 - Requirement 9: 由分层架构、Provider 抽象、Redis 策略与数据模型拆分覆盖
 - Requirement 10: 由 User and RBAC Component 的管理员重置密码接口、审计写入与前端用户管理页面交互覆盖
+- Requirement 11: 由 Storage Component 的压缩包上传会话跟踪、审计汇总聚合与前端上传结果视图覆盖
