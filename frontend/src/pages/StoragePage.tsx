@@ -93,6 +93,11 @@ type ArchiveSummary = {
   skipped: number
 }
 
+type UploadFailureReasonItem = {
+  fileName: string
+  reason: string
+}
+
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -172,6 +177,123 @@ const parseUploadSummary = (data: unknown, fallbackTotal: number): UploadSummary
     successCount: fallbackTotal,
     failureCount: 0,
   }
+}
+
+const normalizeString = (value: unknown): string =>
+  typeof value === 'string' ? value.trim() : ''
+
+const parseFailureReasonItem = (item: unknown): UploadFailureReasonItem | null => {
+  if (!isRecord(item)) {
+    return null
+  }
+
+  const success = item.success
+  if (typeof success === 'boolean' && success) {
+    return null
+  }
+
+  const status = normalizeString(item.status) || normalizeString(item.result)
+  const isFailureStatus =
+    status === 'failure' ||
+    status === 'failed' ||
+    status === 'error' ||
+    status === 'partial_failure' ||
+    status === 'partial-failure'
+  if (!isFailureStatus && status === 'success') {
+    return null
+  }
+
+  const reasonCandidates: unknown[] = [
+    item.reason,
+    item.errorMessage,
+    item.message,
+    item.error,
+    item.detail,
+  ]
+
+  let reason = ''
+  for (const candidate of reasonCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      reason = candidate.trim()
+      break
+    }
+  }
+
+  if (!reason) {
+    const code = normalizeString(item.errorCode)
+    reason = code || 'unknown error'
+  } else {
+    const code = normalizeString(item.errorCode)
+    if (code) {
+      reason = `${reason} (${code})`
+    }
+  }
+
+  const fileName = normalizeString(item.fileName) || normalizeString(item.key)
+  return { fileName, reason }
+}
+
+const parseFailureReasonSummary = (data: unknown, limit = 3): string => {
+  if (!isRecord(data)) {
+    return ''
+  }
+
+  const resultListCandidates: unknown[] = [data.results, data.files, data.items, data.uploads]
+  const failures: UploadFailureReasonItem[] = []
+
+  for (const candidate of resultListCandidates) {
+    if (!Array.isArray(candidate)) {
+      continue
+    }
+
+    for (const item of candidate) {
+      const parsed = parseFailureReasonItem(item)
+      if (parsed) {
+        failures.push(parsed)
+      }
+    }
+
+    if (failures.length > 0) {
+      break
+    }
+  }
+
+  if (failures.length === 0) {
+    return ''
+  }
+
+  return failures
+    .slice(0, Math.max(1, limit))
+    .map((item, index) => {
+      if (item.fileName) {
+        return `${index + 1}. ${item.fileName}: ${item.reason}`
+      }
+      return `${index + 1}. ${item.reason}`
+    })
+    .join('；')
+}
+
+const parseFailureReasonSummaryFromError = (error: unknown, limit = 3): string => {
+  if (!isRecord(error)) {
+    return ''
+  }
+
+  const response = error.response
+  if (!isRecord(response)) {
+    return ''
+  }
+
+  const payload = response.data
+  if (!isRecord(payload)) {
+    return ''
+  }
+
+  const nestedData = payload.data
+  const fromNested = parseFailureReasonSummary(nestedData, limit)
+  if (fromNested) {
+    return fromNested
+  }
+  return parseFailureReasonSummary(payload, limit)
 }
 
 const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
@@ -500,19 +622,36 @@ export function StoragePage() {
       )
       const summary = parseUploadSummary(response.data?.data, uploadableFiles.length)
       const archiveSummary = parseArchiveSummary(response.data?.data)
+      const failureReasonSummary = parseFailureReasonSummary(response.data?.data)
       const archiveSummaryText = archiveSummary ? `；${formatArchiveSummary(archiveSummary)}` : ''
+      const failureReasonText = failureReasonSummary ? ` 失败原因摘要：${failureReasonSummary}。` : ''
       if (summary.failureCount > 0) {
         messageApi.warning(
-          `上传完成：成功 ${summary.successCount}，失败 ${summary.failureCount}${archiveSummaryText}。`,
+          `上传完成：成功 ${summary.successCount}，失败 ${summary.failureCount}${archiveSummaryText}。${failureReasonText}`,
         )
       } else {
         messageApi.success(`上传完成：成功 ${summary.successCount}，失败 0${archiveSummaryText}。`)
       }
+
+      if (archiveSummary && summary.successCount > 0) {
+        const currentPrefix = queryForm.getFieldValue('prefix')
+        if (typeof currentPrefix === 'string' && currentPrefix.trim()) {
+          queryForm.setFieldValue('prefix', '')
+          messageApi.info('已清空前缀以展示最新上传对象')
+        }
+      }
+
       setPendingUploadFiles([])
       setUploadKey('')
       await queryObjects()
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '上传失败。'))
+      const failureReasonSummary = parseFailureReasonSummaryFromError(error)
+      const baseErrorMessage = resolveAPIErrorMessage(error, '上传失败。')
+      if (failureReasonSummary) {
+        messageApi.error(`${baseErrorMessage} 失败原因摘要：${failureReasonSummary}。`)
+      } else {
+        messageApi.error(baseErrorMessage)
+      }
     } finally {
       setSubmitting(false)
     }
