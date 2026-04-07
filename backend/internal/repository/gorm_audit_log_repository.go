@@ -37,6 +37,9 @@ func (r *gormAuditLogRepository) List(ctx context.Context, filter AuditLogFilter
 	if filter.TargetIdentifier != "" {
 		query = query.Where("target_identifier LIKE ?", "%"+filter.TargetIdentifier+"%")
 	}
+	if filter.SessionID != "" {
+		query = query.Where("JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sessionId')) = ?", filter.SessionID)
+	}
 	if filter.Result != "" {
 		query = query.Where("result = ?", filter.Result)
 	}

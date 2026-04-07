@@ -2,6 +2,7 @@ package audits
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -77,6 +78,52 @@ func TestListProjectAuditLogsDeniesProjectReadOnlyUser(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, recorder.Code)
 }
 
+func TestListProjectAuditLogsFiltersBySessionID(t *testing.T) {
+	projectID := uint64(42)
+	repo := &memoryAuditLogRepository{
+		logs: []model.AuditLog{
+			{
+				BaseModel:        model.BaseModel{ID: 1},
+				ActorUserID:      1001,
+				ProjectID:        &projectID,
+				Action:           "object.upload",
+				TargetType:       "object",
+				TargetIdentifier: "assets/a.js",
+				Result:           model.AuditResultSuccess,
+				RequestID:        "req-1",
+				Metadata:         []byte(`{"sessionId":"archive-1"}`),
+			},
+			{
+				BaseModel:        model.BaseModel{ID: 2},
+				ActorUserID:      1001,
+				ProjectID:        &projectID,
+				Action:           "object.upload_archive",
+				TargetType:       "object",
+				TargetIdentifier: "archive-2",
+				Result:           model.AuditResultFailure,
+				RequestID:        "req-2",
+				Metadata:         []byte(`{"sessionId":"archive-2"}`),
+			},
+		},
+	}
+	handler := NewHandler(repo)
+	router := newAuditTestRouter()
+	router.GET("/api/v1/projects/:id/audits",
+		injectIdentity(model.PlatformRoleStandard, 9004),
+		injectProjectScope(projectID, model.ProjectRoleAdmin),
+		middleware.RequireProjectWrite(),
+		handler.ListProjectAuditLogs,
+	)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/projects/42/audits?sessionId=archive-2", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), `"id":1`)
+	require.Contains(t, recorder.Body.String(), `"id":2`)
+}
+
 func newAuditTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -124,9 +171,28 @@ func (r *memoryAuditLogRepository) List(_ context.Context, filter repository.Aud
 		if filter.Action != "" && log.Action != filter.Action {
 			continue
 		}
+		if filter.SessionID != "" {
+			if metadataSessionID(log.Metadata) != filter.SessionID {
+				continue
+			}
+		}
 		result = append(result, log)
 	}
 	return result, nil
+}
+
+func metadataSessionID(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return ""
+	}
+	if value, ok := metadata["sessionId"].(string); ok {
+		return value
+	}
+	return ""
 }
 
 func uint64Pointer(value uint64) *uint64 {
