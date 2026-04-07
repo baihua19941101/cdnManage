@@ -119,6 +119,49 @@ const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 const MIN_OBJECT_FETCH_LIMIT = 200
 const OBJECT_FETCH_LIMIT_MULTIPLIER = 10
 
+const normalizeDirectoryPrefix = (value: string): string => {
+  const trimmed = value.trim().replace(/^\/+/, '')
+  if (!trimmed) {
+    return ''
+  }
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`
+}
+
+const parentDirectoryPrefix = (prefix: string): string => {
+  const normalized = normalizeDirectoryPrefix(prefix)
+  if (!normalized) {
+    return ''
+  }
+  const withoutTrailingSlash = normalized.slice(0, -1)
+  const lastSlashIndex = withoutTrailingSlash.lastIndexOf('/')
+  if (lastSlashIndex < 0) {
+    return ''
+  }
+  return withoutTrailingSlash.slice(0, lastSlashIndex + 1)
+}
+
+const objectDisplayName = (key: string, currentPrefix: string, isDir: boolean): string => {
+  const normalizedPrefix = currentPrefix.trim()
+  let relative = key
+  if (normalizedPrefix && key.startsWith(normalizedPrefix)) {
+    relative = key.slice(normalizedPrefix.length)
+  }
+
+  relative = relative.replace(/^\/+/, '')
+  if (isDir) {
+    relative = relative.replace(/\/+$/, '')
+  }
+
+  if (!relative) {
+    const fallback = key.replace(/\/+$/, '')
+    const segments = fallback.split('/').filter(Boolean)
+    return segments[segments.length - 1] ?? key
+  }
+
+  const segments = relative.split('/').filter(Boolean)
+  return segments[0] ?? relative
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
@@ -576,6 +619,7 @@ export function StoragePage() {
   const canWrite = isPlatformAdminRole(platformRole)
 
   const [objects, setObjects] = useState<ObjectItem[]>([])
+  const [currentPrefix, setCurrentPrefix] = useState('')
   const [objectPageSize, setObjectPageSize] = useState<number>(OBJECT_PAGE_SIZE_OPTIONS[0])
   const [objectCurrentPage, setObjectCurrentPage] = useState(1)
   const [loading, setLoading] = useState(false)
@@ -646,13 +690,15 @@ export function StoragePage() {
   const objectFetchLimit = (pageSize: number): number =>
     Math.max(MIN_OBJECT_FETCH_LIMIT, pageSize * OBJECT_FETCH_LIMIT_MULTIPLIER)
 
-  const queryObjects = async (overridePageSize?: number) => {
+  const queryObjects = async (overridePageSize?: number, prefixOverride?: string) => {
     const values = await queryForm.validateFields()
     const projectID = Number(values.projectId)
     if (!Number.isFinite(projectID) || projectID <= 0) {
       messageApi.error('Project ID 必须是正整数。')
       return
     }
+    const requestPrefix =
+      typeof prefixOverride === 'string' ? prefixOverride.trim() : values.prefix?.trim() || ''
 
     setLoading(true)
     setQueryError(null)
@@ -662,12 +708,13 @@ export function StoragePage() {
         {
           params: {
             bucketName: values.bucketName.trim(),
-            prefix: values.prefix?.trim() || undefined,
+            prefix: requestPrefix || undefined,
             maxKeys: objectFetchLimit(overridePageSize ?? objectPageSize),
           },
         },
       )
       setObjects(response.data.data?.objects ?? [])
+      setCurrentPrefix(requestPrefix)
       setObjectCurrentPage(1)
     } catch (error) {
       setQueryError(resolveAPIErrorMessage(error, '对象列表加载失败。'))
@@ -695,6 +742,8 @@ export function StoragePage() {
     if (!Number.isFinite(projectID) || projectID <= 0) {
       setBucketOptions([])
       queryForm.setFieldValue('bucketName', '')
+      queryForm.setFieldValue('prefix', '')
+      setCurrentPrefix('')
       return
     }
 
@@ -710,13 +759,29 @@ export function StoragePage() {
           : []
       setBucketOptions(names)
       queryForm.setFieldValue('bucketName', names[0] ?? '')
+      queryForm.setFieldValue('prefix', '')
+      setCurrentPrefix('')
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '项目存储桶加载失败。'))
       setBucketOptions([])
       queryForm.setFieldValue('bucketName', '')
+      queryForm.setFieldValue('prefix', '')
+      setCurrentPrefix('')
     } finally {
       setBucketOptionsLoading(false)
     }
+  }
+
+  const enterDirectory = async (directoryKey: string) => {
+    const nextPrefix = normalizeDirectoryPrefix(directoryKey)
+    queryForm.setFieldValue('prefix', nextPrefix)
+    await queryObjects(undefined, nextPrefix)
+  }
+
+  const goToParentDirectory = async () => {
+    const parentPrefix = parentDirectoryPrefix(currentPrefix)
+    queryForm.setFieldValue('prefix', parentPrefix)
+    await queryObjects(undefined, parentPrefix)
   }
 
   const uploadObject = async () => {
@@ -1083,14 +1148,27 @@ export function StoragePage() {
 
   const columns: ColumnsType<ObjectItem> = [
     {
-      title: '对象路径',
+      title: '名称',
       dataIndex: 'key',
-      render: (value: string, record) => (
+      render: (value: string, record) => {
+        const displayName = objectDisplayName(value, currentPrefix, record.isDir)
+        return (
         <Space size={8}>
-          <Typography.Text>{value}</Typography.Text>
+          {record.isDir ? (
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0 }}
+              onClick={() => void enterDirectory(record.key)}
+            >
+              {displayName}
+            </Button>
+          ) : (
+            <Typography.Text>{displayName}</Typography.Text>
+          )}
           {record.isDir ? <Tag color="geekblue">DIR</Tag> : null}
         </Space>
-      ),
+      )},
     },
     { title: '大小', dataIndex: 'size', width: 120 },
     { title: '类型', dataIndex: 'contentType', width: 180 },
@@ -1277,6 +1355,9 @@ export function StoragePage() {
                   const projectID = Number(value)
                   void loadBucketsByProject(projectID)
                   void loadUploadSessionSummaries(projectID)
+                  queryForm.setFieldValue('prefix', '')
+                  setCurrentPrefix('')
+                  setObjects([])
                   setActiveSession(null)
                   setSessionDetailLogs([])
                 }}
@@ -1302,6 +1383,11 @@ export function StoragePage() {
                     .toLowerCase()
                     .includes(input.toLowerCase())
                 }
+                onChange={() => {
+                  queryForm.setFieldValue('prefix', '')
+                  setCurrentPrefix('')
+                  setObjects([])
+                }}
               />
             </Form.Item>
             <Form.Item name="prefix" label="Prefix">
@@ -1426,7 +1512,17 @@ export function StoragePage() {
           </Space>
         </Card>
 
-        <Card title="Object List">
+        <Card
+          title="Object List"
+          extra={
+            <Space>
+              <Typography.Text type="secondary">当前目录：{currentPrefix || '/'}</Typography.Text>
+              <Button onClick={() => void goToParentDirectory()} disabled={!currentPrefix || loading}>
+                返回上一级
+              </Button>
+            </Space>
+          }
+        >
           <Table<ObjectItem>
             rowKey="key"
             columns={columns}
