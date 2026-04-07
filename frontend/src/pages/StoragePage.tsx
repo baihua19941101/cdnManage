@@ -15,6 +15,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Progress,
   Select,
   Space,
   Table,
@@ -50,6 +51,7 @@ type StorageAuditLog = {
   result: string
   requestId: string
   createdAt: string
+  metadata?: Record<string, unknown>
 }
 
 type ApiResponse<T> = {
@@ -96,6 +98,20 @@ type ArchiveSummary = {
 type UploadFailureReasonItem = {
   fileName: string
   reason: string
+}
+
+type UploadSessionSummary = {
+  sessionId: string
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  totalEntries: number
+  successEntries: number
+  failedEntries: number
+  processedEntries: number
+  progressPercent: number
+  result: string
+  createdAt: string
 }
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
@@ -296,6 +312,146 @@ const parseFailureReasonSummaryFromError = (error: unknown, limit = 3): string =
   return parseFailureReasonSummary(payload, limit)
 }
 
+const parseSessionIdFromAuditLog = (log: StorageAuditLog): string => {
+  if (isRecord(log.metadata)) {
+    const metadataSessionID = normalizeString(log.metadata.sessionId)
+    if (metadataSessionID) {
+      return metadataSessionID
+    }
+  }
+  return normalizeString(log.targetIdentifier)
+}
+
+const toMetadataNonNegativeNumber = (metadata: Record<string, unknown>, field: string): number =>
+  toNonNegativeNumber(metadata[field]) ?? 0
+
+const parseArchiveSessionSummary = (log: StorageAuditLog): UploadSessionSummary | null => {
+  const sessionID = parseSessionIdFromAuditLog(log)
+  if (!sessionID) {
+    return null
+  }
+
+  const metadata = isRecord(log.metadata) ? log.metadata : {}
+  const startedAt = normalizeString(metadata.startedAt) || normalizeString(log.createdAt)
+  const finishedAt = normalizeString(metadata.finishedAt)
+  const durationMs = toMetadataNonNegativeNumber(metadata, 'durationMs')
+  const successEntriesRaw = toMetadataNonNegativeNumber(metadata, 'successEntries')
+  const failedEntriesRaw = toMetadataNonNegativeNumber(metadata, 'failedEntries')
+  const totalEntriesRaw = toMetadataNonNegativeNumber(metadata, 'totalEntries')
+
+  const successEntries =
+    successEntriesRaw > 0 ? successEntriesRaw : toMetadataNonNegativeNumber(metadata, 'uploaded')
+  const failedEntries =
+    failedEntriesRaw > 0 ? failedEntriesRaw : toMetadataNonNegativeNumber(metadata, 'failed')
+  const processedEntries = successEntries + failedEntries
+  const totalEntries = totalEntriesRaw > 0 ? totalEntriesRaw : processedEntries
+  const progressPercent =
+    totalEntries > 0 ? Math.min(100, Math.round((processedEntries / totalEntries) * 100)) : 0
+
+  return {
+    sessionId: sessionID,
+    startedAt,
+    finishedAt,
+    durationMs,
+    totalEntries,
+    successEntries,
+    failedEntries,
+    processedEntries,
+    progressPercent,
+    result: normalizeString(log.result),
+    createdAt: normalizeString(log.createdAt),
+  }
+}
+
+const parseFailureReasonFromAuditLog = (log: StorageAuditLog): UploadFailureReasonItem | null => {
+  if (normalizeString(log.result) === 'success') {
+    return null
+  }
+
+  const metadata = isRecord(log.metadata) ? log.metadata : null
+  const reasonCandidates: unknown[] = metadata
+    ? [metadata.reason, metadata.error, metadata.message, metadata.detail]
+    : []
+
+  let reason = ''
+  for (const candidate of reasonCandidates) {
+    const text = normalizeString(candidate)
+    if (text) {
+      reason = text
+      break
+    }
+  }
+
+  if (!reason) {
+    reason = 'unknown error'
+  }
+
+  const fileName = metadata
+    ? normalizeString(metadata.fileName) ||
+      normalizeString(metadata.archiveEntry) ||
+      normalizeString(log.targetIdentifier)
+    : normalizeString(log.targetIdentifier)
+
+  return { fileName, reason }
+}
+
+const buildFailureSummaryFromAuditLogs = (logs: StorageAuditLog[], limit = 3): string => {
+  const failures = logs
+    .map((log) => parseFailureReasonFromAuditLog(log))
+    .filter((item): item is UploadFailureReasonItem => item !== null)
+
+  if (failures.length === 0) {
+    return ''
+  }
+
+  return failures
+    .slice(0, Math.max(1, limit))
+    .map((item, index) => {
+      if (item.fileName) {
+        return `${index + 1}. ${item.fileName}: ${item.reason}`
+      }
+      return `${index + 1}. ${item.reason}`
+    })
+    .join('；')
+}
+
+const formatDateTimeText = (value: string): string => {
+  const normalized = normalizeString(value)
+  if (!normalized) {
+    return '-'
+  }
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) {
+    return normalized
+  }
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+const formatDurationText = (durationMs: number): string => {
+  const ms = Math.max(0, Math.floor(durationMs))
+  if (ms < 1000) {
+    return `${ms}ms`
+  }
+  const totalSeconds = Math.floor(ms / 1000)
+  const milliseconds = ms % 1000
+  const seconds = totalSeconds % 60
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+
+  const segments: string[] = []
+  if (hours > 0) {
+    segments.push(`${hours}h`)
+  }
+  if (minutes > 0 || hours > 0) {
+    segments.push(`${minutes}m`)
+  }
+  segments.push(`${seconds}s`)
+  if (milliseconds > 0) {
+    segments.push(`${milliseconds}ms`)
+  }
+  return segments.join(' ')
+}
+
 const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
   if (!isRecord(data)) {
     return null
@@ -431,6 +587,15 @@ export function StoragePage() {
   const [auditVisible, setAuditVisible] = useState(false)
   const [auditLogs, setAuditLogs] = useState<StorageAuditLog[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
+  const [sessionSummaries, setSessionSummaries] = useState<UploadSessionSummary[]>([])
+  const [sessionSummariesLoading, setSessionSummariesLoading] = useState(false)
+  const [sessionFailureSummaryMap, setSessionFailureSummaryMap] = useState<Record<string, string>>(
+    {},
+  )
+  const [sessionDetailVisible, setSessionDetailVisible] = useState(false)
+  const [sessionDetailLoading, setSessionDetailLoading] = useState(false)
+  const [sessionDetailLogs, setSessionDetailLogs] = useState<StorageAuditLog[]>([])
+  const [activeSession, setActiveSession] = useState<UploadSessionSummary | null>(null)
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [bucketOptions, setBucketOptions] = useState<string[]>([])
@@ -646,6 +811,7 @@ export function StoragePage() {
       setPendingUploadFiles([])
       setUploadKey('')
       await queryObjects()
+      await loadUploadSessionSummaries(projectID)
     } catch (error) {
       const failureReasonSummary = parseFailureReasonSummaryFromError(error)
       const baseErrorMessage = resolveAPIErrorMessage(error, '上传失败。')
@@ -769,6 +935,134 @@ export function StoragePage() {
     }
   }
 
+  const loadFailureSummaryForSession = async (
+    projectID: number,
+    sessionID: string,
+  ): Promise<string> => {
+    const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
+      `/projects/${projectID}/storage/audits`,
+      {
+        params: {
+          action: 'object.upload',
+          sessionId: sessionID,
+          result: 'failure',
+          limit: 5,
+          offset: 0,
+        },
+      },
+    )
+    const logs = response.data.data?.logs ?? []
+    return buildFailureSummaryFromAuditLogs(logs)
+  }
+
+  const loadUploadSessionSummaries = async (projectIDInput?: number) => {
+    const projectID = projectIDInput ?? getQuery().projectID
+    if (!Number.isFinite(projectID) || projectID <= 0) {
+      setSessionSummaries([])
+      setSessionFailureSummaryMap({})
+      return
+    }
+
+    setSessionSummariesLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
+        `/projects/${projectID}/storage/audits`,
+        {
+          params: {
+            action: 'object.upload_archive',
+            limit: 20,
+            offset: 0,
+          },
+        },
+      )
+      const logs = response.data.data?.logs ?? []
+      const seenSessionIDs = new Set<string>()
+      const summaries: UploadSessionSummary[] = []
+
+      logs.forEach((log) => {
+        const summary = parseArchiveSessionSummary(log)
+        if (!summary || seenSessionIDs.has(summary.sessionId)) {
+          return
+        }
+        seenSessionIDs.add(summary.sessionId)
+        summaries.push(summary)
+      })
+
+      setSessionSummaries(summaries)
+      setSessionFailureSummaryMap({})
+
+      const failedSessions = summaries.filter((item) => item.failedEntries > 0)
+      if (failedSessions.length > 0) {
+        const entries = await Promise.all(
+          failedSessions.map(async (item) => {
+            try {
+              const failureSummary = await loadFailureSummaryForSession(projectID, item.sessionId)
+              return [item.sessionId, failureSummary] as const
+            } catch {
+              return [item.sessionId, ''] as const
+            }
+          }),
+        )
+        const map: Record<string, string> = {}
+        entries.forEach(([sessionID, summary]) => {
+          if (summary) {
+            map[sessionID] = summary
+          }
+        })
+        setSessionFailureSummaryMap(map)
+      }
+    } catch (error) {
+      messageApi.error(resolveAPIErrorMessage(error, '上传会话汇总加载失败。'))
+      setSessionSummaries([])
+      setSessionFailureSummaryMap({})
+    } finally {
+      setSessionSummariesLoading(false)
+    }
+  }
+
+  const openSessionDetail = async (sessionSummary: UploadSessionSummary) => {
+    const projectID = getQuery().projectID
+    if (!Number.isFinite(projectID) || projectID <= 0) {
+      messageApi.error('请先填写并查询 Project ID。')
+      return
+    }
+
+    setActiveSession(sessionSummary)
+    setSessionDetailVisible(true)
+    setSessionDetailLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
+        `/projects/${projectID}/storage/audits`,
+        {
+          params: {
+            action: 'object.upload',
+            sessionId: sessionSummary.sessionId,
+            limit: 200,
+            offset: 0,
+          },
+        },
+      )
+      const logs = response.data.data?.logs ?? []
+      setSessionDetailLogs(logs)
+      if (sessionSummary.failedEntries > 0) {
+        const failureSummary = buildFailureSummaryFromAuditLogs(
+          logs.filter((item) => normalizeString(item.result) === 'failure'),
+        )
+        if (failureSummary) {
+          setSessionFailureSummaryMap((prev) => ({
+            ...prev,
+            [sessionSummary.sessionId]: failureSummary,
+          }))
+        }
+      }
+    } catch (error) {
+      messageApi.error(resolveAPIErrorMessage(error, '上传会话明细加载失败。'))
+      setSessionDetailLogs([])
+    } finally {
+      setSessionDetailLoading(false)
+    }
+  }
+
   const columns: ColumnsType<ObjectItem> = [
     {
       title: '对象路径',
@@ -832,6 +1126,92 @@ export function StoragePage() {
     },
   ]
 
+  const sessionColumns: ColumnsType<UploadSessionSummary> = [
+    {
+      title: '会话 ID',
+      dataIndex: 'sessionId',
+      width: 260,
+      render: (value: string) => <Typography.Text copyable>{value}</Typography.Text>,
+    },
+    {
+      title: '整体进展',
+      width: 210,
+      render: (_, record) => (
+        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          <Progress percent={record.progressPercent} size="small" />
+          <Typography.Text type="secondary">
+            {record.processedEntries}/{record.totalEntries || record.processedEntries}
+          </Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '开始时间',
+      dataIndex: 'startedAt',
+      width: 190,
+      render: (value: string) => formatDateTimeText(value),
+    },
+    {
+      title: '结束时间',
+      dataIndex: 'finishedAt',
+      width: 190,
+      render: (value: string) => formatDateTimeText(value),
+    },
+    {
+      title: '耗时',
+      dataIndex: 'durationMs',
+      width: 140,
+      render: (value: number) => formatDurationText(value),
+    },
+    {
+      title: '成功/失败',
+      width: 120,
+      render: (_, record) => (
+        <Typography.Text>
+          {record.successEntries}/{record.failedEntries}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: '失败摘要',
+      width: 340,
+      render: (_, record) => {
+        if (record.failedEntries <= 0) {
+          return <Typography.Text type="secondary">-</Typography.Text>
+        }
+
+        const summary = sessionFailureSummaryMap[record.sessionId]
+        return (
+          <Typography.Text ellipsis={{ tooltip: summary || '点击“查看明细”生成失败摘要。' }}>
+            {summary || '点击“查看明细”生成失败摘要。'}
+          </Typography.Text>
+        )
+      },
+    },
+    {
+      title: '结果',
+      dataIndex: 'result',
+      width: 110,
+      render: (value: string) =>
+        value === 'success' ? (
+          <Tag color="green">success</Tag>
+        ) : value === 'failure' ? (
+          <Tag color="red">failure</Tag>
+        ) : (
+          <Tag>{value || '-'}</Tag>
+        ),
+    },
+    {
+      title: '操作',
+      width: 120,
+      render: (_, record) => (
+        <Button size="small" onClick={() => void openSessionDetail(record)}>
+          查看明细
+        </Button>
+      ),
+    },
+  ]
+
   return (
     <>
       {messageContext}
@@ -876,7 +1256,11 @@ export function StoragePage() {
                   }
                 }}
                 onChange={(value) => {
-                  void loadBucketsByProject(Number(value))
+                  const projectID = Number(value)
+                  void loadBucketsByProject(projectID)
+                  void loadUploadSessionSummaries(projectID)
+                  setActiveSession(null)
+                  setSessionDetailLogs([])
                 }}
               />
             </Form.Item>
@@ -996,6 +1380,34 @@ export function StoragePage() {
           </Space>
         </Card>
 
+        <Card
+          title="Archive Upload Sessions"
+          extra={
+            <Button
+              icon={<ReloadOutlined />}
+              loading={sessionSummariesLoading}
+              onClick={() => void loadUploadSessionSummaries()}
+            >
+              刷新会话
+            </Button>
+          }
+        >
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Text type="secondary">
+              仅展示压缩包上传会话汇总（action = object.upload_archive），可查看对应 object.upload 明细。
+            </Typography.Text>
+            <Table<UploadSessionSummary>
+              rowKey="sessionId"
+              loading={sessionSummariesLoading}
+              columns={sessionColumns}
+              dataSource={sessionSummaries}
+              pagination={{ pageSize: 5 }}
+              locale={{ emptyText: '暂无压缩包上传会话记录。' }}
+              scroll={{ x: 1600 }}
+            />
+          </Space>
+        </Card>
+
         <Card title="Object List">
           <Table<ObjectItem>
             rowKey="key"
@@ -1061,6 +1473,73 @@ export function StoragePage() {
             { title: '操作者', dataIndex: 'actorUsername', width: 140 },
           ]}
         />
+      </Drawer>
+
+      <Drawer
+        title={activeSession ? `上传会话明细：${activeSession.sessionId}` : '上传会话明细'}
+        open={sessionDetailVisible}
+        onClose={() => setSessionDetailVisible(false)}
+        width={980}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {activeSession ? (
+            <Card size="small">
+              <Space direction="vertical" size={4}>
+                <Typography.Text>
+                  会话进展：{activeSession.processedEntries}/
+                  {activeSession.totalEntries || activeSession.processedEntries} (
+                  {activeSession.progressPercent}%)
+                </Typography.Text>
+                <Typography.Text>
+                  开始：{formatDateTimeText(activeSession.startedAt)}，结束：
+                  {formatDateTimeText(activeSession.finishedAt)}，耗时：
+                  {formatDurationText(activeSession.durationMs)}
+                </Typography.Text>
+                <Typography.Text>
+                  成功：{activeSession.successEntries}，失败：{activeSession.failedEntries}
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  失败摘要：
+                  {sessionFailureSummaryMap[activeSession.sessionId] || '当前会话无失败摘要。'}
+                </Typography.Text>
+              </Space>
+            </Card>
+          ) : null}
+
+          <Table<StorageAuditLog>
+            rowKey="id"
+            loading={sessionDetailLoading}
+            pagination={{ pageSize: 12 }}
+            dataSource={sessionDetailLogs}
+            columns={[
+              { title: '时间', dataIndex: 'createdAt', width: 210 },
+              { title: '动作', dataIndex: 'action', width: 140 },
+              {
+                title: '结果',
+                dataIndex: 'result',
+                width: 120,
+                render: (value: string) =>
+                  value === 'success' ? (
+                    <Tag color="green">success</Tag>
+                  ) : value === 'failure' ? (
+                    <Tag color="red">failure</Tag>
+                  ) : (
+                    <Tag>{value}</Tag>
+                  ),
+              },
+              { title: '对象', dataIndex: 'targetIdentifier' },
+              {
+                title: '失败原因',
+                width: 260,
+                render: (_, record) =>
+                  normalizeString(record.result) === 'failure'
+                    ? parseFailureReasonFromAuditLog(record)?.reason ?? '-'
+                    : '-',
+              },
+              { title: '操作者', dataIndex: 'actorUsername', width: 120 },
+            ]}
+          />
+        </Space>
       </Drawer>
     </>
   )
