@@ -89,6 +89,18 @@ type DeleteBucketObjectInput struct {
 	Key        string
 }
 
+type DeleteBucketObjectsInput struct {
+	BucketName string
+	Keys       []string
+}
+
+type DeleteBucketObjectResult struct {
+	Key       string
+	Success   bool
+	ErrorCode string
+	Message   string
+}
+
 type RenameBucketObjectInput struct {
 	BucketName string
 	SourceKey  string
@@ -349,19 +361,78 @@ func (s *Service) DeleteBucketObject(ctx context.Context, projectID uint64, inpu
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(input.Key) == "" {
+	key := strings.TrimSpace(input.Key)
+	if key == "" {
 		return httpresp.NewAppError(400, "validation_error", "object key is required", nil)
+	}
+	if strings.HasSuffix(key, "/") {
+		return httpresp.NewAppError(400, "directory_delete_not_supported", "directory delete is not supported", nil)
 	}
 
 	if err := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
 		Bucket:     bucket.BucketName,
 		Region:     bucket.Region,
-		Key:        strings.TrimSpace(input.Key),
+		Key:        key,
 		Credential: credentialPayload,
 	}); err != nil {
 		return mapObjectStorageOperationError(err, "delete")
 	}
 	return nil
+}
+
+func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, input DeleteBucketObjectsInput) ([]DeleteBucketObjectResult, error) {
+	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
+	if err != nil {
+		return nil, err
+	}
+
+	keys := trimNonEmptyValues(input.Keys)
+	if len(keys) == 0 {
+		return nil, httpresp.NewAppError(400, "validation_error", "at least one object key is required", nil)
+	}
+
+	results := make([]DeleteBucketObjectResult, 0, len(keys))
+	for _, key := range keys {
+		if strings.HasSuffix(key, "/") {
+			results = append(results, DeleteBucketObjectResult{
+				Key:       key,
+				Success:   false,
+				ErrorCode: "directory_delete_not_supported",
+				Message:   "directory key is not supported in batch delete",
+			})
+			continue
+		}
+
+		deleteErr := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+			Bucket:     bucket.BucketName,
+			Region:     bucket.Region,
+			Key:        key,
+			Credential: credentialPayload,
+		})
+		if deleteErr != nil {
+			mappedErr := mapObjectStorageOperationError(deleteErr, "delete")
+			result := DeleteBucketObjectResult{
+				Key:       key,
+				Success:   false,
+				ErrorCode: "provider_operation_failed",
+				Message:   mappedErr.Error(),
+			}
+			appErr := &httpresp.AppError{}
+			if errors.As(mappedErr, &appErr) {
+				result.ErrorCode = appErr.Code
+			}
+			results = append(results, result)
+			continue
+		}
+
+		results = append(results, DeleteBucketObjectResult{
+			Key:     key,
+			Success: true,
+			Message: "object deleted",
+		})
+	}
+
+	return results, nil
 }
 
 func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, input RenameBucketObjectInput) error {

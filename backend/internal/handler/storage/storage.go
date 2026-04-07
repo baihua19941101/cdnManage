@@ -139,6 +139,30 @@ type renameObjectRequest struct {
 	TargetKey  string `json:"targetKey" binding:"required"`
 }
 
+type batchDeleteObjectRequest struct {
+	BucketName string   `json:"bucketName"`
+	Keys       []string `json:"keys" binding:"required,min=1"`
+}
+
+type batchDeleteObjectItemResult struct {
+	Key       string `json:"key"`
+	Result    string `json:"result"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type batchDeleteObjectSummary struct {
+	Total   int `json:"total"`
+	Success int `json:"success"`
+	Failure int `json:"failure"`
+}
+
+type batchDeleteObjectResponse struct {
+	Message string                        `json:"message"`
+	Summary batchDeleteObjectSummary      `json:"summary"`
+	Results []batchDeleteObjectItemResult `json:"results"`
+}
+
 func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64) *Handler {
 	if maxUploadSizeMB <= 0 {
 		maxUploadSizeMB = config.DefaultMaxUploadFileSizeMB
@@ -173,6 +197,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	projectGroup.GET("/audits", middleware.RequireProjectRead(), handler.ListAuditLogs)
 	projectGroup.POST("/upload", middleware.RequireProjectWrite(), handler.UploadObject)
 	projectGroup.DELETE("/objects", middleware.RequireProjectWrite(), handler.DeleteObject)
+	projectGroup.DELETE("/objects/batch", middleware.RequireProjectWrite(), handler.BatchDeleteObjects)
 	projectGroup.PUT("/rename", middleware.RequireProjectWrite(), handler.RenameObject)
 }
 
@@ -602,6 +627,65 @@ func (h *Handler) DeleteObject(ctx *gin.Context) {
 
 	h.recordAudit(ctx, projectID, "object.delete", "object", key, model.AuditResultSuccess, nil)
 	httpresp.Success(ctx, gin.H{"message": "object deleted"})
+}
+
+func (h *Handler) BatchDeleteObjects(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	var req batchDeleteObjectRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid batch delete request", gin.H{"error": err.Error()}))
+		return
+	}
+
+	deleteResults, err := h.projectService.DeleteBucketObjects(ctx.Request.Context(), projectID, serviceprojects.DeleteBucketObjectsInput{
+		BucketName: req.BucketName,
+		Keys:       req.Keys,
+	})
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	results := make([]batchDeleteObjectItemResult, 0, len(deleteResults))
+	summary := batchDeleteObjectSummary{}
+	for _, item := range deleteResults {
+		summary.Total++
+		if item.Success {
+			summary.Success++
+			results = append(results, batchDeleteObjectItemResult{
+				Key:    item.Key,
+				Result: "success",
+			})
+			h.recordAudit(ctx, projectID, "object.delete", "object", item.Key, model.AuditResultSuccess, gin.H{
+				"batch": true,
+			})
+			continue
+		}
+
+		summary.Failure++
+		results = append(results, batchDeleteObjectItemResult{
+			Key:       item.Key,
+			Result:    "failure",
+			ErrorCode: item.ErrorCode,
+			Reason:    item.Message,
+		})
+		h.recordAudit(ctx, projectID, "object.delete", "object", item.Key, model.AuditResultFailure, gin.H{
+			"batch":     true,
+			"errorCode": item.ErrorCode,
+			"error":     item.Message,
+		})
+	}
+
+	httpresp.Success(ctx, batchDeleteObjectResponse{
+		Message: "batch delete completed",
+		Summary: summary,
+		Results: results,
+	})
 }
 
 func (h *Handler) RenameObject(ctx *gin.Context) {
