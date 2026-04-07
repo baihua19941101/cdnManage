@@ -61,7 +61,7 @@
 
 #### Acceptance Criteria
 
-1. WHEN 平台管理员或项目管理员保存项目配置，THE CDN 管理平台 SHALL 允许每个项目配置 1 个或 2 个 CDN 地址。
+1. WHEN 平台管理员或项目管理员保存项目配置，THE CDN 管理平台 SHALL 允许每个项目配置 0 个至 2 个存储桶与 0 个至 2 个 CDN 地址。
 2. WHEN 已授权用户发起目录刷新，THE CDN 管理平台 SHALL 对所选项目的指定 CDN 地址提交目录刷新请求。
 3. WHEN 已授权用户发起 URL 刷新，THE CDN 管理平台 SHALL 对所选项目的指定 CDN 地址提交 URL 刷新请求。
 4. WHEN 已授权用户发起资源同步，THE CDN 管理平台 SHALL 将项目存储桶中的最新资源发布到对应 CDN 路径并触发缓存更新流程。
