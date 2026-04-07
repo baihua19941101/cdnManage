@@ -4,6 +4,9 @@ import "errors"
 
 const (
 	DefaultMaxUploadFileSizeMB int64 = 20
+	DefaultArchiveParallelism        = 4
+	MinArchiveParallelism            = 2
+	MaxArchiveParallelism            = 8
 	bytesPerMB                 int64 = 1024 * 1024
 )
 
@@ -66,12 +69,22 @@ type CORSConfig struct {
 
 // UploadConfig defines upload validation limits.
 type UploadConfig struct {
-	MaxFileSizeMB int64 `yaml:"max_file_size_mb"`
+	MaxFileSizeMB      int64 `yaml:"max_file_size_mb"`
+	ArchiveParallelism int   `yaml:"archive_parallelism"`
 }
 
 func (c *UploadConfig) ApplyDefaults() {
 	if c.MaxFileSizeMB == 0 {
 		c.MaxFileSizeMB = DefaultMaxUploadFileSizeMB
+	}
+	if c.ArchiveParallelism == 0 {
+		c.ArchiveParallelism = DefaultArchiveParallelism
+	}
+	if c.ArchiveParallelism < MinArchiveParallelism {
+		c.ArchiveParallelism = MinArchiveParallelism
+	}
+	if c.ArchiveParallelism > MaxArchiveParallelism {
+		c.ArchiveParallelism = MaxArchiveParallelism
 	}
 }
 

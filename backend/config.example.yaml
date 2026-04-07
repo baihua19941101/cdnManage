@@ -87,3 +87,5 @@ request_limit: 100
 upload:
   # 单个上传文件大小上限，单位 MB；未配置时默认 20
   max_file_size_mb: 20
+  # 压缩包条目并发上传 worker 数，默认 4，运行时会钳制到 2~8
+  archive_parallelism: 4
