@@ -942,8 +942,8 @@ func (h *Handler) uploadZipEntries(
 			continue
 		}
 		if !entry.FileInfo().Mode().IsRegular() {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry type is not supported", nil, sessionID, results, summary)
-			stats.Failed += failure.Failed
+			// Symlink/hardlink and other non-regular entries are ignored for safety.
+			stats.Skipped++
 			continue
 		}
 
@@ -1033,8 +1033,8 @@ func (h *Handler) uploadTarEntries(
 			continue
 		}
 		if !header.FileInfo().Mode().IsRegular() {
-			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", "archive entry type is not supported", nil, sessionID, results, summary)
-			stats.Failed += failure.Failed
+			// Symlink/hardlink and other non-regular entries are ignored for safety.
+			stats.Skipped++
 			continue
 		}
 
