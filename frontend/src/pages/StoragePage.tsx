@@ -1750,18 +1750,12 @@ export function StoragePage() {
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
             {uploadStageAActive ? (
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Typography.Text data-testid="upload-stage-a-label">
-                  上传阶段 A（浏览器到后端）
-                </Typography.Text>
                 <Progress
                   percent={uploadStageAProgress}
                   status="active"
                   size="small"
                   data-testid="upload-stage-a-progress"
                 />
-                <Typography.Text type="secondary" data-testid="upload-stage-a-percent">
-                  当前传输进度：{uploadStageAProgress}%
-                </Typography.Text>
               </Space>
             ) : null}
             <Input

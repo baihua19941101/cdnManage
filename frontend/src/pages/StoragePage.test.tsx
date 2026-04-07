@@ -301,8 +301,11 @@ describe('StoragePage upload stage A interactions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /上\s*传|上传/ }))
 
-    expect(await screen.findByTestId('upload-stage-a-label')).toBeInTheDocument()
-    expect(screen.getByTestId('upload-stage-a-percent')).toHaveTextContent('当前传输进度：50%')
+    const progress = await screen.findByTestId('upload-stage-a-progress')
+    expect(progress).toBeInTheDocument()
+    expect(screen.queryByTestId('upload-stage-a-label')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('upload-stage-a-percent')).not.toBeInTheDocument()
+    expect(progress).toHaveTextContent('50%')
 
     resolveUpload?.({
       data: {
@@ -316,7 +319,7 @@ describe('StoragePage upload stage A interactions', () => {
     })
 
     await waitFor(() => {
-      expect(screen.queryByTestId('upload-stage-a-label')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('upload-stage-a-progress')).not.toBeInTheDocument()
     })
   }, 20000)
 
@@ -374,7 +377,7 @@ describe('StoragePage upload stage A interactions', () => {
 
     expect(await screen.findByText('上传已取消。')).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.queryByTestId('upload-stage-a-label')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('upload-stage-a-progress')).not.toBeInTheDocument()
     })
   }, 20000)
 })
