@@ -10,12 +10,14 @@ import (
 	"github.com/baihua19941101/cdnManage/internal/middleware"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	auditservice "github.com/baihua19941101/cdnManage/internal/service/audit"
 	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 	serviceusers "github.com/baihua19941101/cdnManage/internal/service/users"
 )
 
 type Handler struct {
-	service *serviceusers.Service
+	service  *serviceusers.Service
+	recorder *auditservice.Recorder
 }
 
 type createUserRequest struct {
@@ -60,8 +62,11 @@ type projectRoleResponse struct {
 	ProjectRole string `json:"projectRole"`
 }
 
-func NewHandler(service *serviceusers.Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *serviceusers.Service, audits repository.AuditLogRepository) *Handler {
+	return &Handler{
+		service:  service,
+		recorder: auditservice.NewRecorder(audits),
+	}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service) {
@@ -165,15 +170,18 @@ func (h *Handler) ResetPassword(ctx *gin.Context) {
 
 	var req resetPasswordRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		h.recordResetPasswordAudit(ctx, userID, model.AuditResultFailure, gin.H{"error": err.Error()})
 		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid reset password request", gin.H{"error": err.Error()}))
 		return
 	}
 
 	if err := h.service.ResetPassword(ctx.Request.Context(), userID, req.NewPassword); err != nil {
+		h.recordResetPasswordAudit(ctx, userID, model.AuditResultFailure, gin.H{"error": err.Error()})
 		ctx.Error(err)
 		return
 	}
 
+	h.recordResetPasswordAudit(ctx, userID, model.AuditResultSuccess, nil)
 	httpresp.Success(ctx, gin.H{"message": "password reset"})
 }
 
@@ -244,4 +252,30 @@ func toUserResponse(user *model.User) userResponse {
 	}
 
 	return response
+}
+
+func (h *Handler) recordResetPasswordAudit(ctx *gin.Context, targetUserID uint64, result string, details gin.H) {
+	if h.recorder == nil {
+		return
+	}
+
+	actorUserID, ok := middleware.CurrentUserID(ctx)
+	if !ok || actorUserID == 0 {
+		return
+	}
+
+	metadata := map[string]interface{}{}
+	if details != nil {
+		metadata = map[string]interface{}(details)
+	}
+
+	_ = h.recorder.Record(ctx.Request.Context(), auditservice.RecordInput{
+		ActorUserID:      actorUserID,
+		Action:           "user.reset_password",
+		TargetType:       "user",
+		TargetIdentifier: strconv.FormatUint(targetUserID, 10),
+		Result:           result,
+		RequestID:        httpresp.GetRequestID(ctx),
+		Metadata:         metadata,
+	})
 }

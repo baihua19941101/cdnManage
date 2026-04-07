@@ -74,7 +74,7 @@ func New() (*Application, error) {
 		store.Projects(),
 		txManager,
 	)
-	userHandler := userhandler.NewHandler(userService)
+	userHandler := userhandler.NewHandler(userService, store.AuditLogs())
 	projectService := serviceprojects.NewService(
 		store.Projects(),
 		txManager,
