@@ -1,5 +1,6 @@
 import {
   EditOutlined,
+  KeyOutlined,
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
@@ -73,6 +74,11 @@ type BindingFormValues = {
   }>
 }
 
+type ResetPasswordFormValues = {
+  newPassword: string
+  confirmPassword: string
+}
+
 const platformRoleOptions = [
   { label: 'Super Admin', value: 'super_admin' },
   { label: 'Platform Admin', value: 'platform_admin' },
@@ -119,6 +125,7 @@ export function UsersPage() {
   const [createForm] = Form.useForm<CreateUserFormValues>()
   const [editForm] = Form.useForm<EditUserFormValues>()
   const [bindingForm] = Form.useForm<BindingFormValues>()
+  const [resetPasswordForm] = Form.useForm<ResetPasswordFormValues>()
 
   const [users, setUsers] = useState<User[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -129,6 +136,7 @@ export function UsersPage() {
   const [createVisible, setCreateVisible] = useState(false)
   const [editVisible, setEditVisible] = useState(false)
   const [bindingVisible, setBindingVisible] = useState(false)
+  const [resetPasswordVisible, setResetPasswordVisible] = useState(false)
   const [activeUser, setActiveUser] = useState<User | null>(null)
 
   const fetchUsers = async () => {
@@ -240,6 +248,33 @@ export function UsersPage() {
     setBindingVisible(true)
   }
 
+  const openResetPassword = (user: User) => {
+    setActiveUser(user)
+    resetPasswordForm.resetFields()
+    setResetPasswordVisible(true)
+  }
+
+  const submitResetPassword = async () => {
+    if (!activeUser || !canWrite) {
+      return
+    }
+    const values = await resetPasswordForm.validateFields()
+
+    setSubmitting(true)
+    try {
+      await apiClient.put(`/users/${activeUser.id}/password`, {
+        newPassword: values.newPassword,
+      })
+      messageApi.success('密码重置成功。')
+      setResetPasswordVisible(false)
+      resetPasswordForm.resetFields()
+    } catch (e) {
+      messageApi.error(resolveErrorMessage(e, '重置密码失败。'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const submitBindings = async () => {
     if (!activeUser || !canWrite) {
       return
@@ -289,6 +324,13 @@ export function UsersPage() {
         <Space>
           <Button icon={<EditOutlined />} onClick={() => openEdit(record)} disabled={!canWrite}>
             编辑
+          </Button>
+          <Button
+            icon={<KeyOutlined />}
+            onClick={() => openResetPassword(record)}
+            disabled={!canWrite}
+          >
+            重置密码
           </Button>
           <Button icon={<TeamOutlined />} onClick={() => openBindings(record)} disabled={!canWrite}>
             项目角色绑定
@@ -480,6 +522,49 @@ export function UsersPage() {
               </Space>
             )}
           </Form.List>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`重置密码${activeUser ? ` - ${activeUser.username}` : ''}`}
+        open={resetPasswordVisible}
+        onCancel={() => setResetPasswordVisible(false)}
+        onOk={() => void submitResetPassword()}
+        okButtonProps={{ loading: submitting, disabled: !canWrite }}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          新密码长度至少 8 位。
+        </Typography.Paragraph>
+        <Form<ResetPasswordFormValues> form={resetPasswordForm} layout="vertical">
+          <Form.Item
+            name="newPassword"
+            label="新密码"
+            rules={[
+              { required: true, message: '请输入新密码' },
+              { min: 8, message: '密码长度至少 8 位' },
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            label="确认新密码"
+            dependencies={['newPassword']}
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('newPassword') === value) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(new Error('两次输入的密码不一致'))
+                },
+              }),
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
         </Form>
       </Modal>
     </>
