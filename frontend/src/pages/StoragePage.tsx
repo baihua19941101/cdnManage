@@ -115,6 +115,7 @@ type UploadSessionSummary = {
 }
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
+const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -573,6 +574,7 @@ export function StoragePage() {
   const canWrite = isPlatformAdminRole(platformRole)
 
   const [objects, setObjects] = useState<ObjectItem[]>([])
+  const [objectPageSize, setObjectPageSize] = useState<number>(OBJECT_PAGE_SIZE_OPTIONS[0])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
@@ -636,7 +638,7 @@ export function StoragePage() {
     }
   }
 
-  const queryObjects = async () => {
+  const queryObjects = async (overrideMaxKeys?: number) => {
     const values = await queryForm.validateFields()
     const projectID = Number(values.projectId)
     if (!Number.isFinite(projectID) || projectID <= 0) {
@@ -653,6 +655,7 @@ export function StoragePage() {
           params: {
             bucketName: values.bucketName.trim(),
             prefix: values.prefix?.trim() || undefined,
+            maxKeys: overrideMaxKeys ?? objectPageSize,
           },
         },
       )
@@ -1414,7 +1417,18 @@ export function StoragePage() {
             columns={columns}
             dataSource={objects}
             loading={loading}
-            pagination={{ pageSize: 10 }}
+            pagination={{
+              pageSize: objectPageSize,
+              showSizeChanger: true,
+              pageSizeOptions: OBJECT_PAGE_SIZE_OPTIONS.map(String),
+              onShowSizeChange: (_, size) => {
+                if (size === objectPageSize) {
+                  return
+                }
+                setObjectPageSize(size)
+                void queryObjects(size)
+              },
+            }}
           />
         </Card>
       </Space>
