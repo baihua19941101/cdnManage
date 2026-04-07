@@ -118,6 +118,21 @@ type BatchDeletePayload = {
   results?: BatchDeleteItemResult[]
 }
 
+type DeleteObjectSummary = {
+  key?: string
+  targetType?: string
+  result?: string
+  deletedObjects?: number
+  failedObjects?: number
+  errorCode?: string
+  reason?: string
+}
+
+type DeleteObjectPayload = {
+  message?: string
+  summary?: DeleteObjectSummary
+}
+
 type UploadSessionSummary = {
   sessionId: string
   startedAt: string
@@ -947,7 +962,7 @@ export function StoragePage() {
     }
   }
 
-  const deleteObject = async (key: string) => {
+  const deleteObject = async (key: string, isDir: boolean) => {
     if (!canWrite) {
       return
     }
@@ -959,11 +974,30 @@ export function StoragePage() {
 
     setSubmitting(true)
     try {
-      await apiClient.delete(`/projects/${projectID}/storage/objects`, {
+      const response = await apiClient.delete<ApiResponse<DeleteObjectPayload>>(`/projects/${projectID}/storage/objects`, {
         params: { bucketName, key },
       })
-      messageApi.success('删除成功。')
-      await queryObjects()
+      const payload = response.data?.data
+      const summary = payload?.summary
+      const deletedObjects = toNonNegativeNumber(summary?.deletedObjects) ?? 0
+      const failedObjects = toNonNegativeNumber(summary?.failedObjects) ?? 0
+      if (isDir) {
+        if (failedObjects > 0) {
+          messageApi.warning(
+            `目录删除完成：成功删除 ${deletedObjects}，失败 ${failedObjects}${summary?.reason ? `。${summary.reason}` : ''}`,
+          )
+        } else {
+          messageApi.success(`目录删除完成：成功删除 ${deletedObjects} 个对象。`)
+        }
+      } else {
+        messageApi.success('删除成功。')
+      }
+
+      if (isDir && normalizeDirectoryPrefix(key) === normalizeDirectoryPrefix(currentPrefix)) {
+        await goToParentDirectory()
+      } else {
+        await queryObjects()
+      }
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '删除失败。'))
     } finally {
@@ -1278,16 +1312,16 @@ export function StoragePage() {
             重命名
           </Button>
           <Popconfirm
-            title={record.isDir ? '目录不支持直接删除' : '确认删除该对象？'}
-            onConfirm={() => void deleteObject(record.key)}
+            title={record.isDir ? '确认删除该目录及其下全部对象？' : '确认删除该对象？'}
+            onConfirm={() => void deleteObject(record.key, record.isDir)}
             okButtonProps={{ loading: submitting }}
-            disabled={!canWrite || record.isDir}
+            disabled={!canWrite}
           >
             <Button
               danger
               icon={<DeleteOutlined />}
               size="small"
-              disabled={!canWrite || record.isDir}
+              disabled={!canWrite}
             >
               删除
             </Button>
