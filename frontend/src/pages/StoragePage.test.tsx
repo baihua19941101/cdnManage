@@ -1,5 +1,6 @@
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { AxiosError } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { StoragePage } from './StoragePage'
@@ -14,6 +15,15 @@ const selectProjectAndBucket = async (projectLabel: string, bucketLabel: string)
   fireEvent.click(await screen.findByText(projectLabel))
   await waitFor(() => {
     expect(screen.getAllByText(bucketLabel).length).toBeGreaterThan(0)
+  })
+}
+
+const chooseSingleUploadFile = async (file: File) => {
+  const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null
+  expect(fileInput).not.toBeNull()
+  fireEvent.change(fileInput!, { target: { files: [file] } })
+  await waitFor(() => {
+    expect(screen.getByText(file.name)).toBeInTheDocument()
   })
 }
 
@@ -217,4 +227,154 @@ describe('StoragePage rename interactions', () => {
       expect(objectListRequestCount).toBe(2)
     })
   }, 15000)
+})
+
+describe('StoragePage upload stage A interactions', () => {
+  beforeEach(() => {
+    act(() => {
+      useAuthStore.getState().setSession({
+        token: 'token',
+        user: {
+          id: 1,
+          email: 'admin@example.com',
+          platformRole: 'platform_admin',
+          status: 'active',
+        },
+      })
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    cleanup()
+    act(() => {
+      useAuthStore.getState().clearSession()
+      useAuthStore.getState().setInitialized(false)
+    })
+  })
+
+  it('shows stage A upload progress during request', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/storage/upload-policy') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { maxUploadSizeBytes: 20 * 1024 * 1024 },
+          },
+        } as never
+      }
+      if (url === '/projects') {
+        return {
+          data: { code: 'success', message: 'ok', data: [{ id: 7, name: 'Upload Project' }] },
+        } as never
+      }
+      if (url === '/projects/7') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { id: 7, buckets: [{ bucketName: 'demo-bucket' }] },
+          },
+        } as never
+      }
+      if (url === '/projects/7/storage/objects') {
+        return { data: { code: 'success', message: 'ok', data: { objects: [] } } } as never
+      }
+      if (url === '/projects/7/storage/audits') {
+        return { data: { code: 'success', message: 'ok', data: { logs: [] } } } as never
+      }
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+
+    let resolveUpload: ((value: unknown) => void) | null = null
+    vi.spyOn(apiClient, 'post').mockImplementation(async (_url, _data, config) => {
+      config?.onUploadProgress?.({ loaded: 5, total: 10 } as never)
+      return await new Promise((resolve) => {
+        resolveUpload = resolve
+      })
+    })
+
+    render(<StoragePage />)
+    await selectProjectAndBucket('7 - Upload Project', 'demo-bucket')
+    await chooseSingleUploadFile(new File(['hello'], 'demo.txt', { type: 'text/plain' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /上\s*传|上传/ }))
+
+    expect(await screen.findByTestId('upload-stage-a-label')).toBeInTheDocument()
+    expect(screen.getByTestId('upload-stage-a-percent')).toHaveTextContent('当前传输进度：50%')
+
+    resolveUpload?.({
+      data: {
+        code: 'success',
+        message: 'ok',
+        data: {
+          summary: { success: 1, failure: 0 },
+          results: [{ fileName: 'demo.txt', result: 'success' }],
+        },
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('upload-stage-a-label')).not.toBeInTheDocument()
+    })
+  }, 20000)
+
+  it('cancels uploading and shows cancellation message', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/storage/upload-policy') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { maxUploadSizeBytes: 20 * 1024 * 1024 },
+          },
+        } as never
+      }
+      if (url === '/projects') {
+        return {
+          data: { code: 'success', message: 'ok', data: [{ id: 8, name: 'Cancel Project' }] },
+        } as never
+      }
+      if (url === '/projects/8') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { id: 8, buckets: [{ bucketName: 'demo-bucket' }] },
+          },
+        } as never
+      }
+      if (url === '/projects/8/storage/objects') {
+        return { data: { code: 'success', message: 'ok', data: { objects: [] } } } as never
+      }
+      if (url === '/projects/8/storage/audits') {
+        return { data: { code: 'success', message: 'ok', data: { logs: [] } } } as never
+      }
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+
+    vi.spyOn(apiClient, 'post').mockImplementation(async (_url, _data, config) => {
+      return await new Promise((_, reject) => {
+        const signal = config?.signal as AbortSignal | undefined
+        signal?.addEventListener('abort', () => {
+          reject(new AxiosError('canceled', 'ERR_CANCELED'))
+        })
+      })
+    })
+
+    render(<StoragePage />)
+    await selectProjectAndBucket('8 - Cancel Project', 'demo-bucket')
+    await chooseSingleUploadFile(new File(['world'], 'cancel.txt', { type: 'text/plain' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /上\s*传|上传/ }))
+    expect(await screen.findByRole('button', { name: '取消上传' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '取消上传' }))
+
+    expect(await screen.findByText('上传已取消。')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByTestId('upload-stage-a-label')).not.toBeInTheDocument()
+    })
+  }, 20000)
 })

@@ -27,7 +27,8 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import type { TableRowSelection } from 'antd/es/table/interface'
 import type { UploadFile } from 'antd/es/upload/interface'
-import { useEffect, useState } from 'react'
+import axios from 'axios'
+import { useEffect, useRef, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -167,6 +168,7 @@ type UploadSessionSummary = {
 }
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
+const UPLOAD_STAGE_A_TIMEOUT_MS = 10 * 60 * 1000
 const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 const MIN_OBJECT_FETCH_LIMIT = 200
 const OBJECT_FETCH_LIMIT_MULTIPLIER = 10
@@ -702,6 +704,9 @@ export function StoragePage() {
   const [pendingUploadFiles, setPendingUploadFiles] = useState<UploadFile[]>([])
   const [uploadKey, setUploadKey] = useState('')
   const [uploadSizeLimitBytes, setUploadSizeLimitBytes] = useState(DEFAULT_UPLOAD_SIZE_LIMIT_BYTES)
+  const [uploadStageAProgress, setUploadStageAProgress] = useState(0)
+  const [uploadStageAActive, setUploadStageAActive] = useState(false)
+  const uploadAbortControllerRef = useRef<AbortController | null>(null)
 
   const [renameVisible, setRenameVisible] = useState(false)
   const [renamingSourceKey, setRenamingSourceKey] = useState('')
@@ -750,6 +755,14 @@ export function StoragePage() {
       cancelled = true
     }
   }, [messageApi])
+
+  useEffect(
+    () => () => {
+      uploadAbortControllerRef.current?.abort()
+      uploadAbortControllerRef.current = null
+    },
+    [],
+  )
 
   const getQuery = () => {
     const values = queryForm.getFieldsValue()
@@ -928,6 +941,10 @@ export function StoragePage() {
       }
     }
 
+    const abortController = new AbortController()
+    uploadAbortControllerRef.current = abortController
+    setUploadStageAProgress(0)
+    setUploadStageAActive(true)
     setSubmitting(true)
     try {
       const response = await apiClient.post<ApiResponse<unknown>>(
@@ -935,10 +952,20 @@ export function StoragePage() {
         formData,
         {
           headers: { 'Content-Type': 'multipart/form-data' },
-          // Archive uploads can take much longer than normal API calls.
-          timeout: 0,
+          timeout: UPLOAD_STAGE_A_TIMEOUT_MS,
+          signal: abortController.signal,
+          onUploadProgress: (event) => {
+            const total = typeof event.total === 'number' && event.total > 0 ? event.total : undefined
+            const loaded = typeof event.loaded === 'number' && event.loaded >= 0 ? event.loaded : 0
+            if (!total) {
+              return
+            }
+            const percent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)))
+            setUploadStageAProgress(percent)
+          },
         },
       )
+      setUploadStageAProgress(100)
       const summary = parseUploadSummary(response.data?.data, uploadableFiles.length)
       const archiveSummary = parseArchiveSummary(response.data?.data)
       const failureReasonSummary = parseFailureReasonSummary(response.data?.data)
@@ -965,6 +992,14 @@ export function StoragePage() {
       await queryObjects()
       await loadUploadSessionSummaries(projectID)
     } catch (error) {
+      if (axios.isAxiosError(error) && error.code === 'ERR_CANCELED') {
+        messageApi.warning('上传已取消。')
+        return
+      }
+      if (axios.isAxiosError(error) && error.code === 'ECONNABORTED') {
+        messageApi.error(resolveAPIErrorMessage(error, '上传阶段 A 超时，请重试。'))
+        return
+      }
       const failureReasonSummary = parseFailureReasonSummaryFromError(error)
       const baseErrorMessage = resolveAPIErrorMessage(error, '上传失败。')
       if (failureReasonSummary) {
@@ -973,8 +1008,15 @@ export function StoragePage() {
         messageApi.error(baseErrorMessage)
       }
     } finally {
+      uploadAbortControllerRef.current = null
+      setUploadStageAActive(false)
+      setUploadStageAProgress(0)
       setSubmitting(false)
     }
+  }
+
+  const cancelUpload = () => {
+    uploadAbortControllerRef.current?.abort()
   }
 
   const downloadObject = async (key: string) => {
@@ -1683,9 +1725,9 @@ export function StoragePage() {
                 }}
                 showUploadList
                 fileList={pendingUploadFiles}
-                disabled={!canWrite}
+                disabled={!canWrite || uploadStageAActive}
               >
-                <Button icon={<UploadOutlined />} disabled={!canWrite}>
+                <Button icon={<UploadOutlined />} disabled={!canWrite || uploadStageAActive}>
                   选择文件
                 </Button>
               </Upload>
@@ -1693,14 +1735,35 @@ export function StoragePage() {
                 type="primary"
                 loading={submitting}
                 onClick={() => void uploadObject()}
-                disabled={!canWrite}
+                disabled={!canWrite || uploadStageAActive}
               >
                 上传
               </Button>
+              {uploadStageAActive ? (
+                <Button danger onClick={cancelUpload}>
+                  取消上传
+                </Button>
+              ) : null}
             </Space>
           }
         >
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {uploadStageAActive ? (
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Typography.Text data-testid="upload-stage-a-label">
+                  上传阶段 A（浏览器到后端）
+                </Typography.Text>
+                <Progress
+                  percent={uploadStageAProgress}
+                  status="active"
+                  size="small"
+                  data-testid="upload-stage-a-progress"
+                />
+                <Typography.Text type="secondary" data-testid="upload-stage-a-percent">
+                  当前传输进度：{uploadStageAProgress}%
+                </Typography.Text>
+              </Space>
+            ) : null}
             <Input
               placeholder="可选：单文件时为对象 Key，多文件时作为 keyPrefix"
               value={uploadKey}
