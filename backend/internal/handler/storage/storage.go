@@ -3,6 +3,7 @@ package storage
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -299,25 +300,45 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			continue
 		}
 
-		if archiveFormat := detectArchiveFormat(fileHeader.Filename); archiveFormat != "" {
+		archiveFormatByName := detectArchiveFormatByName(fileHeader.Filename)
+		file, openErr := fileHeader.Open()
+		if openErr != nil {
+			reason := "file could not be opened"
+			metadata := gin.H{
+				"error":    openErr.Error(),
+				"fileName": fileName,
+			}
+			if archiveFormatByName != "" {
+				reason = "archive could not be opened"
+				metadata["archive"] = true
+			}
+			appendUploadResult(&results, &summary, uploadObjectItemResult{
+				FileName: fileName,
+				Result:   "failure",
+				Reason:   reason,
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, metadata)
+			continue
+		}
+
+		archiveFormat, detectErr := detectArchiveFormat(fileHeader.Filename, file)
+		if detectErr != nil {
+			_ = file.Close()
+			appendUploadResult(&results, &summary, uploadObjectItemResult{
+				FileName: fileName,
+				Result:   "failure",
+				Reason:   "file could not be read",
+			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, gin.H{
+				"error":    detectErr.Error(),
+				"fileName": fileName,
+			})
+			continue
+		}
+
+		if archiveFormat != "" {
 			archiveSummary = ensureArchiveSummary(archiveSummary)
 			archiveSummary.ArchivesProcessed++
-
-			file, openErr := fileHeader.Open()
-			if openErr != nil {
-				appendUploadResult(&results, &summary, uploadObjectItemResult{
-					FileName: fileName,
-					Result:   "failure",
-					Reason:   "archive could not be opened",
-				})
-				archiveSummary.Failed++
-				h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, gin.H{
-					"error":    openErr.Error(),
-					"fileName": fileName,
-					"archive":  true,
-				})
-				continue
-			}
 
 			stats := h.uploadArchiveEntries(ctx, projectID, bucketName, fileHeader, file, resolveArchiveUploadBaseKey(key, keyPrefix, len(fileHeaders)), archiveFormat, &results, &summary)
 			archiveSummary.Extracted += stats.Extracted
@@ -330,6 +351,7 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 
 		targetKey, keyErr := resolveUploadObjectKey(fileHeader, key, keyPrefix, len(fileHeaders))
 		if keyErr != nil {
+			_ = file.Close()
 			appendUploadResult(&results, &summary, uploadObjectItemResult{
 				FileName: fileName,
 				Key:      targetKey,
@@ -343,23 +365,9 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			continue
 		}
 		if h.isUploadSizeExceeded(fileHeader.Size) {
+			_ = file.Close()
 			h.recordUploadTooLarge(ctx, projectID, fileName, targetKey, fileHeader.Size, "", "")
 			appendUploadResult(&results, &summary, h.uploadTooLargeResult(fileName, targetKey, fileHeader.Size))
-			continue
-		}
-
-		file, openErr := fileHeader.Open()
-		if openErr != nil {
-			appendUploadResult(&results, &summary, uploadObjectItemResult{
-				FileName: fileName,
-				Key:      targetKey,
-				Result:   "failure",
-				Reason:   "file could not be opened",
-			})
-			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
-				"error":    openErr.Error(),
-				"fileName": fileName,
-			})
 			continue
 		}
 
@@ -669,7 +677,18 @@ func appendUploadResult(results *[]uploadObjectItemResult, summary *uploadObject
 	}
 }
 
-func detectArchiveFormat(fileName string) string {
+const archiveSniffSize = 512
+
+func detectArchiveFormat(fileName string, file multipart.File) (string, error) {
+	if contentFormat, err := detectArchiveFormatFromContent(file); err != nil {
+		return "", err
+	} else if contentFormat != "" {
+		return contentFormat, nil
+	}
+	return detectArchiveFormatByName(fileName), nil
+}
+
+func detectArchiveFormatByName(fileName string) string {
 	lowerName := strings.ToLower(strings.TrimSpace(fileName))
 	switch {
 	case strings.HasSuffix(lowerName, ".tar.gz"), strings.HasSuffix(lowerName, ".tgz"):
@@ -681,6 +700,91 @@ func detectArchiveFormat(fileName string) string {
 	default:
 		return ""
 	}
+}
+
+func detectArchiveFormatFromContent(file multipart.File) (string, error) {
+	header, err := peekFileHeader(file, archiveSniffSize)
+	if err != nil {
+		return "", err
+	}
+
+	switch {
+	case hasZipSignature(header):
+		return "zip", nil
+	case hasTarUstarHeader(header):
+		return "tar", nil
+	case hasGzipSignature(header):
+		isTarGz, err := gzipContainsTarHeader(file)
+		if err != nil {
+			return "", err
+		}
+		if isTarGz {
+			return "tar.gz", nil
+		}
+	}
+
+	return "", nil
+}
+
+func peekFileHeader(file multipart.File, size int) ([]byte, error) {
+	if file == nil || size <= 0 {
+		return nil, nil
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	buffer := make([]byte, size)
+	n, err := io.ReadFull(file, buffer)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+	if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
+		return nil, seekErr
+	}
+
+	return buffer[:n], nil
+}
+
+func hasZipSignature(header []byte) bool {
+	return len(header) >= 2 && header[0] == 'P' && header[1] == 'K'
+}
+
+func hasGzipSignature(header []byte) bool {
+	return len(header) >= 2 && header[0] == 0x1f && header[1] == 0x8b
+}
+
+func hasTarUstarHeader(header []byte) bool {
+	if len(header) < archiveSniffSize {
+		return false
+	}
+	return bytes.HasPrefix(header[257:263], []byte("ustar"))
+}
+
+func gzipContainsTarHeader(file multipart.File) (bool, error) {
+	if file == nil {
+		return false, nil
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	defer func() {
+		_, _ = file.Seek(0, io.SeekStart)
+	}()
+
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return false, nil
+	}
+	defer gzipReader.Close()
+
+	buffer := make([]byte, archiveSniffSize)
+	n, readErr := io.ReadFull(gzipReader, buffer)
+	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+		return false, nil
+	}
+
+	return hasTarUstarHeader(buffer[:n]), nil
 }
 
 func resolveArchiveUploadBaseKey(key, keyPrefix string, fileCount int) string {
