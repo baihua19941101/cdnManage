@@ -2,6 +2,11 @@ package config
 
 import "errors"
 
+const (
+	DefaultMaxUploadFileSizeMB int64 = 20
+	bytesPerMB                 int64 = 1024 * 1024
+)
+
 // ServerConfig contains network settings for the HTTP server.
 type ServerConfig struct {
 	Port int `yaml:"port"`
@@ -59,6 +64,25 @@ type CORSConfig struct {
 	MaxAgeSeconds    int      `yaml:"max_age_seconds"`
 }
 
+// UploadConfig defines upload validation limits.
+type UploadConfig struct {
+	MaxFileSizeMB int64 `yaml:"max_file_size_mb"`
+}
+
+func (c *UploadConfig) ApplyDefaults() {
+	if c.MaxFileSizeMB == 0 {
+		c.MaxFileSizeMB = DefaultMaxUploadFileSizeMB
+	}
+}
+
+func (c UploadConfig) MaxFileSizeBytes() int64 {
+	maxFileSizeMB := c.MaxFileSizeMB
+	if maxFileSizeMB <= 0 {
+		maxFileSizeMB = DefaultMaxUploadFileSizeMB
+	}
+	return maxFileSizeMB * bytesPerMB
+}
+
 // AppConfig aggregates all configurable properties.
 type AppConfig struct {
 	Server       ServerConfig     `yaml:"server"`
@@ -69,7 +93,12 @@ type AppConfig struct {
 	Encryption   EncryptionConfig `yaml:"encryption"`
 	SuperAdmin   SuperAdminConfig `yaml:"super_admin"`
 	CORS         CORSConfig       `yaml:"cors"`
+	Upload       UploadConfig     `yaml:"upload"`
 	RequestLimit int              `yaml:"request_limit"`
+}
+
+func (c *AppConfig) ApplyDefaults() {
+	c.Upload.ApplyDefaults()
 }
 
 // Validate ensures required fields are present.
@@ -111,6 +140,8 @@ func (c *AppConfig) Validate() error {
 		return errors.New("cors allow_headers is required")
 	case c.CORS.MaxAgeSeconds < 0:
 		return errors.New("cors max_age_seconds must be greater than or equal to 0")
+	case c.Upload.MaxFileSizeMB < 0:
+		return errors.New("upload max_file_size_mb must be greater than or equal to 0")
 	case c.RequestLimit <= 0:
 		return errors.New("request limit must be positive")
 	}

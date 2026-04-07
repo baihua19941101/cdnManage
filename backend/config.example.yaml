@@ -82,3 +82,8 @@ cors:
 
 # 通用请求限流阈值（当前中间件策略会读取此值）
 request_limit: 100
+
+# 上传限制配置
+upload:
+  # 单个上传文件大小上限，单位 MB；未配置时默认 20
+  max_file_size_mb: 20

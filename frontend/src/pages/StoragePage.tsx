@@ -25,7 +25,7 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { UploadFile } from 'antd/es/upload/interface'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -92,6 +92,8 @@ type ArchiveSummary = {
   failed: number
   skipped: number
 }
+
+const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -216,6 +218,75 @@ const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
 const formatArchiveSummary = (summary: ArchiveSummary): string =>
   `解压与上传摘要：压缩包 ${summary.archivesProcessed}，解压 ${summary.extracted}，上传 ${summary.uploaded}，跳过 ${summary.skipped}，失败 ${summary.failed}`
 
+const formatUploadLimitText = (bytes: number): string => {
+  const mb = bytes / (1024 * 1024)
+  const mbText = Number.isInteger(mb) ? String(mb) : mb.toFixed(2).replace(/\.?0+$/, '')
+  const bytesText = new Intl.NumberFormat('en-US').format(bytes)
+  return `${mbText} MB (${bytesText} bytes)`
+}
+
+const toPositiveInteger = (value: unknown): number | null => {
+  const numberValue = toNonNegativeNumber(value)
+  if (numberValue === null || numberValue <= 0) {
+    return null
+  }
+  return Math.floor(numberValue)
+}
+
+const parseUploadPolicyLimitBytes = (data: unknown): number | null => {
+  const directBytes = toPositiveInteger(data)
+  if (directBytes !== null) {
+    return directBytes
+  }
+
+  if (!isRecord(data)) {
+    return null
+  }
+
+  const byteCandidates: unknown[] = [
+    data.maxUploadSizeBytes,
+    data.maxSizeBytes,
+    data.uploadLimitBytes,
+    data.limitBytes,
+  ]
+
+  for (const candidate of byteCandidates) {
+    const parsed = toPositiveInteger(candidate)
+    if (parsed !== null) {
+      return parsed
+    }
+  }
+
+  const mbCandidates: unknown[] = [
+    data.maxUploadSizeMB,
+    data.maxSizeMB,
+    data.uploadLimitMB,
+    data.limitMB,
+  ]
+
+  for (const candidate of mbCandidates) {
+    const parsedMB = toPositiveInteger(candidate)
+    if (parsedMB !== null) {
+      return parsedMB * 1024 * 1024
+    }
+  }
+
+  const nestedCandidates: unknown[] = [data.policy, data.uploadPolicy, data.limit]
+  for (const candidate of nestedCandidates) {
+    const nested = parseUploadPolicyLimitBytes(candidate)
+    if (nested !== null) {
+      return nested
+    }
+  }
+
+  return null
+}
+
+const fetchUploadPolicyLimitBytes = async (): Promise<number> => {
+  const response = await apiClient.get<ApiResponse<unknown>>('/storage/upload-policy')
+  return parseUploadPolicyLimitBytes(response.data?.data) ?? DEFAULT_UPLOAD_SIZE_LIMIT_BYTES
+}
+
 export function StoragePage() {
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
@@ -230,6 +301,7 @@ export function StoragePage() {
 
   const [pendingUploadFiles, setPendingUploadFiles] = useState<UploadFile[]>([])
   const [uploadKey, setUploadKey] = useState('')
+  const [uploadSizeLimitBytes, setUploadSizeLimitBytes] = useState(DEFAULT_UPLOAD_SIZE_LIMIT_BYTES)
 
   const [renameVisible, setRenameVisible] = useState(false)
   const [renamingSourceKey, setRenamingSourceKey] = useState('')
@@ -241,6 +313,31 @@ export function StoragePage() {
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [bucketOptions, setBucketOptions] = useState<string[]>([])
   const [bucketOptionsLoading, setBucketOptionsLoading] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadUploadPolicy = async () => {
+      try {
+        const limit = await fetchUploadPolicyLimitBytes()
+        if (!cancelled) {
+          setUploadSizeLimitBytes(limit)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setUploadSizeLimitBytes(DEFAULT_UPLOAD_SIZE_LIMIT_BYTES)
+          messageApi.warning(
+            `${resolveAPIErrorMessage(error, '上传策略读取失败。')} 已回退默认限制 ${formatUploadLimitText(DEFAULT_UPLOAD_SIZE_LIMIT_BYTES)}。`,
+          )
+        }
+      }
+    }
+
+    void loadUploadPolicy()
+    return () => {
+      cancelled = true
+    }
+  }, [messageApi])
 
   const getQuery = () => {
     const values = queryForm.getFieldsValue()
@@ -327,6 +424,16 @@ export function StoragePage() {
     if (!canWrite) {
       return
     }
+
+    let currentLimitBytes = uploadSizeLimitBytes
+    try {
+      currentLimitBytes = await fetchUploadPolicyLimitBytes()
+      setUploadSizeLimitBytes(currentLimitBytes)
+    } catch {
+      currentLimitBytes = DEFAULT_UPLOAD_SIZE_LIMIT_BYTES
+      setUploadSizeLimitBytes(DEFAULT_UPLOAD_SIZE_LIMIT_BYTES)
+    }
+
     const { projectID, bucketName } = getQuery()
     if (!projectID || !bucketName) {
       messageApi.error('请先填写并查询 Project ID 与 BucketName。')
@@ -341,12 +448,32 @@ export function StoragePage() {
       return
     }
 
+    const oversizedFiles = files.filter((file) => file.size > currentLimitBytes)
+    if (oversizedFiles.length > 0) {
+      const limitText = formatUploadLimitText(currentLimitBytes)
+      oversizedFiles.forEach((file) => {
+        messageApi.error(`文件 ${file.name} 超过当前大小限制（${limitText}），已拒绝上传。`)
+      })
+      setPendingUploadFiles((prev) =>
+        prev.filter((item) => {
+          const originFile = item.originFileObj
+          return originFile ? originFile.size <= currentLimitBytes : false
+        }),
+      )
+    }
+
+    const uploadableFiles = files.filter((file) => file.size <= currentLimitBytes)
+    if (uploadableFiles.length === 0) {
+      messageApi.error('当前待上传文件均超过大小限制，请重新选择。')
+      return
+    }
+
     const formData = new FormData()
     formData.append('bucketName', bucketName)
 
     const trimmedKey = uploadKey.trim()
-    if (files.length === 1) {
-      const singleFile = files[0]
+    if (uploadableFiles.length === 1) {
+      const singleFile = uploadableFiles[0]
       if (!singleFile) {
         messageApi.error('请选择待上传文件。')
         return
@@ -356,7 +483,7 @@ export function StoragePage() {
       }
       formData.append('file', singleFile)
     } else {
-      files.forEach((file) => formData.append('files', file))
+      uploadableFiles.forEach((file) => formData.append('files', file))
       if (trimmedKey) {
         formData.append('keyPrefix', trimmedKey)
       }
@@ -371,7 +498,7 @@ export function StoragePage() {
           headers: { 'Content-Type': 'multipart/form-data' },
         },
       )
-      const summary = parseUploadSummary(response.data?.data, files.length)
+      const summary = parseUploadSummary(response.data?.data, uploadableFiles.length)
       const archiveSummary = parseArchiveSummary(response.data?.data)
       const archiveSummaryText = archiveSummary ? `；${formatArchiveSummary(archiveSummary)}` : ''
       if (summary.failureCount > 0) {
@@ -660,6 +787,12 @@ export function StoragePage() {
               <Upload
                 multiple
                 beforeUpload={(file) => {
+                  if (file.size > uploadSizeLimitBytes) {
+                    messageApi.error(
+                      `文件 ${file.name} 超过当前大小限制（${formatUploadLimitText(uploadSizeLimitBytes)}），已拒绝加入列表。`,
+                    )
+                    return Upload.LIST_IGNORE
+                  }
                   setPendingUploadFiles((prev) => {
                     if (prev.some((item) => item.uid === file.uid)) {
                       return prev
@@ -707,6 +840,9 @@ export function StoragePage() {
               onChange={(event) => setUploadKey(event.target.value)}
               disabled={!canWrite}
             />
+            <Typography.Text type="secondary">
+              当前大小限制：{formatUploadLimitText(uploadSizeLimitBytes)}
+            </Typography.Text>
             <Typography.Text type="secondary">
               待上传文件：{pendingUploadFiles.length}
               {pendingUploadFiles.length > 1 && uploadKey.trim()

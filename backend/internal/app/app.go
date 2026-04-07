@@ -88,7 +88,7 @@ func New() (*Application, error) {
 	}
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
-	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs())
+	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs(), cfg.Upload.MaxFileSizeMB)
 	auditHandler := audithandler.NewHandler(store.AuditLogs())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
