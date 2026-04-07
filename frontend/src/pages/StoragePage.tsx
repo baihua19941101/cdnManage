@@ -618,6 +618,8 @@ export function StoragePage() {
         formData,
         {
           headers: { 'Content-Type': 'multipart/form-data' },
+          // Archive uploads can take much longer than normal API calls.
+          timeout: 0,
         },
       )
       const summary = parseUploadSummary(response.data?.data, uploadableFiles.length)
