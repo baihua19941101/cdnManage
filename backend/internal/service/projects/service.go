@@ -279,7 +279,7 @@ func (s *Service) UpdateCDNs(ctx context.Context, projectID uint64, cdns []Proje
 	if err != nil {
 		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
 	}
-	if err := validateCDNBindingsWithProviderType(projectBucketProviderType(project.Buckets), cdns); err != nil {
+	if err := validateCDNBindings(cdns); err != nil {
 		return nil, err
 	}
 
@@ -888,38 +888,31 @@ func validateBindings(buckets []ProjectBucketInput, cdns []ProjectCDNInput) erro
 		return httpresp.NewAppError(400, "invalid_bucket_count", "project can bind at most 2 buckets", nil)
 	}
 
-	bucketProviderType, err := validateBucketBindings(buckets)
-	if err != nil {
+	if err := validateBucketBindings(buckets); err != nil {
 		return err
 	}
 
-	return validateCDNBindingsWithProviderType(bucketProviderType, cdns)
+	return validateCDNBindings(cdns)
 }
 
-func validateBucketBindings(buckets []ProjectBucketInput) (string, error) {
+func validateBucketBindings(buckets []ProjectBucketInput) error {
 	if len(buckets) == 0 {
-		return "", nil
+		return nil
 	}
 
-	providerType := ""
 	primaryBucketCount := 0
 	seenBuckets := make(map[string]struct{}, len(buckets))
 	for _, bucket := range buckets {
 		bucketName := strings.TrimSpace(bucket.BucketName)
 		credential := strings.TrimSpace(bucketCredentialPlaintext(bucket))
 		if bucket.ProviderType == "" || bucketName == "" || credential == "" {
-			return "", httpresp.NewAppError(400, "invalid_bucket_binding", "bucket binding is incomplete", nil)
+			return httpresp.NewAppError(400, "invalid_bucket_binding", "bucket binding is incomplete", nil)
 		}
 		if !model.IsKnownProviderType(bucket.ProviderType) || bucket.ProviderType == model.ProviderTypeUnknown {
-			return "", httpresp.NewAppError(400, "invalid_provider_type", "bucket provider type is invalid", nil)
-		}
-		if providerType == "" {
-			providerType = bucket.ProviderType
-		} else if providerType != bucket.ProviderType {
-			return "", httpresp.NewAppError(400, "inconsistent_provider_type", "all bindings must use the same provider type", nil)
+			return httpresp.NewAppError(400, "invalid_provider_type", "bucket provider type is invalid", nil)
 		}
 		if _, exists := seenBuckets[bucketName]; exists {
-			return "", httpresp.NewAppError(400, "duplicate_bucket_binding", "bucket bindings must be unique", nil)
+			return httpresp.NewAppError(400, "duplicate_bucket_binding", "bucket bindings must be unique", nil)
 		}
 		seenBuckets[bucketName] = struct{}{}
 		if bucket.IsPrimary {
@@ -927,13 +920,13 @@ func validateBucketBindings(buckets []ProjectBucketInput) (string, error) {
 		}
 	}
 	if primaryBucketCount != 1 {
-		return "", httpresp.NewAppError(400, "invalid_bucket_primary_binding", "exactly one primary bucket is required", nil)
+		return httpresp.NewAppError(400, "invalid_bucket_primary_binding", "exactly one primary bucket is required", nil)
 	}
 
-	return providerType, nil
+	return nil
 }
 
-func validateCDNBindingsWithProviderType(providerType string, cdns []ProjectCDNInput) error {
+func validateCDNBindings(cdns []ProjectCDNInput) error {
 	if len(cdns) > 2 {
 		return httpresp.NewAppError(400, "invalid_cdn_count", "project can bind at most 2 cdn endpoints", nil)
 	}
@@ -946,11 +939,6 @@ func validateCDNBindingsWithProviderType(providerType string, cdns []ProjectCDNI
 	for _, cdn := range cdns {
 		if cdn.ProviderType == "" || cdn.CDNEndpoint == "" {
 			return httpresp.NewAppError(400, "invalid_cdn_binding", "cdn binding is incomplete", nil)
-		}
-		if providerType == "" {
-			providerType = cdn.ProviderType
-		} else if providerType != cdn.ProviderType {
-			return httpresp.NewAppError(400, "inconsistent_provider_type", "all bindings must use the same provider type", nil)
 		}
 		if _, exists := seenCDNs[cdn.CDNEndpoint]; exists {
 			return httpresp.NewAppError(400, "duplicate_cdn_binding", "cdn bindings must be unique", nil)

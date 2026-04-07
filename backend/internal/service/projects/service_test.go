@@ -128,6 +128,188 @@ func TestServiceCreateRejectsOutOfRangeBindingCounts(t *testing.T) {
 	})
 }
 
+func TestServiceCreateAllowsMixedProviderBindings(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "mixed-provider-" + suffix,
+		Description: "allow mixed provider bindings in one project",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: "aliyun",
+				BucketName:   "bucket-aliyun-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+			{
+				ProviderType: "tencent_cloud",
+				BucketName:   "bucket-tencent-" + suffix,
+				Region:       "ap-guangzhou",
+				Credential:   `{"accessKeyId":"AKID_TEST","accessKeySecret":"secret"}`,
+				IsPrimary:    false,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: "aliyun",
+				CDNEndpoint:  "https://cdn-aliyun-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+			{
+				ProviderType: "tencent_cloud",
+				CDNEndpoint:  "https://cdn-tencent-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"AKID_TEST","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    false,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, project.Buckets, 2)
+	require.Len(t, project.CDNs, 2)
+
+	bucketProviders := map[string]struct{}{}
+	for _, bucket := range project.Buckets {
+		bucketProviders[bucket.ProviderType] = struct{}{}
+	}
+	require.Contains(t, bucketProviders, "aliyun")
+	require.Contains(t, bucketProviders, "tencent_cloud")
+
+	cdnProviders := map[string]struct{}{}
+	for _, cdn := range project.CDNs {
+		cdnProviders[cdn.ProviderType] = struct{}{}
+	}
+	require.Contains(t, cdnProviders, "aliyun")
+	require.Contains(t, cdnProviders, "tencent_cloud")
+}
+
+func TestServiceCreateAllowsMixedProviderBindings(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "mixed-provider-create-" + suffix,
+		Description: "allow mixed provider bindings in one project",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-aliyun-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+			{
+				ProviderType: model.ProviderTypeTencent,
+				BucketName:   "bucket-tencent-" + suffix,
+				Region:       "ap-guangzhou",
+				Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
+				IsPrimary:    false,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-aliyun-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+			{
+				ProviderType: model.ProviderTypeTencent,
+				CDNEndpoint:  "https://cdn-tencent-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    false,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, project.Buckets, 2)
+	require.Len(t, project.CDNs, 2)
+
+	bucketProviders := map[string]struct{}{}
+	for _, bucket := range project.Buckets {
+		bucketProviders[bucket.ProviderType] = struct{}{}
+	}
+	require.Contains(t, bucketProviders, model.ProviderTypeAliyun)
+	require.Contains(t, bucketProviders, model.ProviderTypeTencent)
+
+	cdnProviders := map[string]struct{}{}
+	for _, cdn := range project.CDNs {
+		cdnProviders[cdn.ProviderType] = struct{}{}
+	}
+	require.Contains(t, cdnProviders, model.ProviderTypeAliyun)
+	require.Contains(t, cdnProviders, model.ProviderTypeTencent)
+}
+
+func TestServiceUpdateCDNsAllowsMixedProviderBindings(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "mixed-provider-update-cdn-" + suffix,
+		Description: "update cdn with mixed providers",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-main-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-main-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	updatedCDNs, err := service.UpdateCDNs(ctx, project.ID, []ProjectCDNInput{
+		{
+			ProviderType: model.ProviderTypeAliyun,
+			CDNEndpoint:  "https://cdn-aliyun-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		},
+		{
+			ProviderType: model.ProviderTypeTencent,
+			CDNEndpoint:  "https://cdn-tencent-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    false,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, updatedCDNs, 2)
+
+	cdnProviders := map[string]struct{}{}
+	for _, cdn := range updatedCDNs {
+		cdnProviders[cdn.ProviderType] = struct{}{}
+	}
+	require.Contains(t, cdnProviders, model.ProviderTypeAliyun)
+	require.Contains(t, cdnProviders, model.ProviderTypeTencent)
+}
+
 func TestServiceCreateEncryptsCredentialAndGetByIDReturnsMaskedCredential(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
