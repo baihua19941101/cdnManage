@@ -320,6 +320,101 @@ describe('StoragePage upload stage A interactions', () => {
     })
   }, 20000)
 
+  it('polls stage B session summary by sessionId after upload', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url, config) => {
+      if (url === '/storage/upload-policy') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { maxUploadSizeBytes: 20 * 1024 * 1024 },
+          },
+        } as never
+      }
+      if (url === '/projects') {
+        return {
+          data: { code: 'success', message: 'ok', data: [{ id: 9, name: 'StageB Project' }] },
+        } as never
+      }
+      if (url === '/projects/9') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { id: 9, buckets: [{ bucketName: 'demo-bucket' }] },
+          },
+        } as never
+      }
+      if (url === '/projects/9/storage/objects') {
+        return { data: { code: 'success', message: 'ok', data: { objects: [] } } } as never
+      }
+      if (url === '/projects/9/storage/audits') {
+        const params = (config?.params ?? {}) as Record<string, unknown>
+        if (params.action === 'object.upload_archive' && params.sessionId === 'archive-123') {
+          return {
+            data: {
+              code: 'success',
+              message: 'ok',
+              data: {
+                logs: [
+                  {
+                    id: 901,
+                    actorUserId: 1,
+                    actorUsername: 'admin',
+                    action: 'object.upload_archive',
+                    targetType: 'object',
+                    targetIdentifier: 'archive-123',
+                    result: 'success',
+                    requestId: 'req-archive-123',
+                    createdAt: '2026-04-07T01:00:00Z',
+                    metadata: {
+                      sessionId: 'archive-123',
+                      startedAt: '2026-04-07T01:00:00Z',
+                      finishedAt: '2026-04-07T01:00:05Z',
+                      durationMs: 5000,
+                      totalEntries: 2,
+                      successEntries: 2,
+                      failedEntries: 0,
+                    },
+                  },
+                ],
+              },
+            },
+          } as never
+        }
+        return { data: { code: 'success', message: 'ok', data: { logs: [] } } } as never
+      }
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
+      data: {
+        code: 'success',
+        message: 'ok',
+        data: {
+          sessionId: 'archive-123',
+          startedAt: '2026-04-07T01:00:00Z',
+          summary: { success: 2, failure: 0 },
+          totalEntries: 2,
+          successEntries: 2,
+          failedEntries: 0,
+        },
+      },
+    } as never)
+
+    render(<StoragePage />)
+    await selectProjectAndBucket('9 - StageB Project', 'demo-bucket')
+    await chooseSingleUploadFile(new File(['stage-b'], 'stage-b.txt', { type: 'text/plain' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /上\s*传|上传/ }))
+
+    expect(await screen.findByTestId('upload-stage-b-label')).toBeInTheDocument()
+    expect(screen.getByTestId('upload-stage-b-session-id')).toHaveTextContent('archive-123')
+    await waitFor(() => {
+      expect(screen.getByTestId('upload-stage-b-counts')).toHaveTextContent('进度：2/2；成功：2，失败：0')
+    })
+  }, 20000)
+
   it('cancels uploading and shows cancellation message', async () => {
     vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
       if (url === '/storage/upload-policy') {
