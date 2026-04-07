@@ -399,7 +399,7 @@ func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = service.RenameBucketObject(ctx, project.ID, RenameBucketObjectInput{
+	result, err := service.RenameBucketObject(ctx, project.ID, RenameBucketObjectInput{
 		SourceKey: "assets/old.css",
 		TargetKey: "assets/new.css",
 	})
@@ -407,6 +407,125 @@ func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
 	require.Equal(t, "bucket-rename-"+suffix, providerStub.lastRename.Bucket)
 	require.Equal(t, "assets/old.css", providerStub.lastRename.SourceKey)
 	require.Equal(t, "assets/new.css", providerStub.lastRename.TargetKey)
+	require.Equal(t, "file", result.TargetType)
+	require.True(t, result.Success)
+	require.Equal(t, 1, result.MigratedObjects)
+	require.Equal(t, 0, result.FailedObjects)
+}
+
+func TestServiceRenameBucketDirectoryMigratesObjects(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &fakeObjectStorageProvider{
+		providerType: provider.TypeAliyun,
+		objects: []provider.ObjectInfo{
+			{Key: "assets/app.js", IsDir: false},
+			{Key: "assets/images/", IsDir: true},
+			{Key: "assets/images/logo.png", IsDir: false},
+		},
+	}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-rename-directory-" + suffix,
+		Description: "storage rename directory test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-rename-directory-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-rename-directory-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	result, err := service.RenameBucketObject(ctx, project.ID, RenameBucketObjectInput{
+		SourceKey: "assets/",
+		TargetKey: "release",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Equal(t, "directory", result.TargetType)
+	require.Equal(t, "assets/", result.SourceKey)
+	require.Equal(t, "release/", result.TargetKey)
+	require.Equal(t, 2, result.MigratedObjects)
+	require.Equal(t, 0, result.FailedObjects)
+	require.Empty(t, result.FailureReasons)
+	require.Len(t, providerStub.renameRequests, 2)
+	require.Equal(t, "assets/app.js", providerStub.renameRequests[0].SourceKey)
+	require.Equal(t, "release/app.js", providerStub.renameRequests[0].TargetKey)
+	require.Equal(t, "assets/images/logo.png", providerStub.renameRequests[1].SourceKey)
+	require.Equal(t, "release/images/logo.png", providerStub.renameRequests[1].TargetKey)
+}
+
+func TestServiceRenameBucketDirectoryReturnsPartialFailureSummary(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &fakeObjectStorageProvider{
+		providerType: provider.TypeAliyun,
+		objects: []provider.ObjectInfo{
+			{Key: "assets/app.js", IsDir: false},
+			{Key: "assets/images/logo.png", IsDir: false},
+		},
+		renameErrors: map[string]error{
+			"assets/images/logo.png": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"rename_object",
+				provider.ErrCodeOperationFailed,
+				"rename failed",
+				false,
+				nil,
+			),
+		},
+	}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-rename-directory-partial-" + suffix,
+		Description: "storage rename directory partial failure test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-rename-directory-partial-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-rename-directory-partial-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	result, err := service.RenameBucketObject(ctx, project.ID, RenameBucketObjectInput{
+		SourceKey: "assets/",
+		TargetKey: "release/",
+	})
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Equal(t, "provider_operation_failed", result.ErrorCode)
+	require.Equal(t, 1, result.MigratedObjects)
+	require.Equal(t, 1, result.FailedObjects)
+	require.NotEmpty(t, result.FailureReasons)
+	require.Contains(t, result.FailureReasons[0], "assets/images/logo.png")
+	require.Len(t, providerStub.renameRequests, 2)
 }
 
 func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
@@ -557,12 +676,15 @@ func TestServiceSyncResourcesMapsProviderErrors(t *testing.T) {
 }
 
 type fakeObjectStorageProvider struct {
-	providerType provider.Type
-	objects      []provider.ObjectInfo
-	lastRequest  provider.ListObjectsRequest
-	lastUpload   provider.UploadObjectRequest
-	lastDelete   provider.DeleteObjectRequest
-	lastRename   provider.RenameObjectRequest
+	providerType   provider.Type
+	objects        []provider.ObjectInfo
+	listErrors     map[string]error
+	renameErrors   map[string]error
+	lastRequest    provider.ListObjectsRequest
+	lastUpload     provider.UploadObjectRequest
+	lastDelete     provider.DeleteObjectRequest
+	lastRename     provider.RenameObjectRequest
+	renameRequests []provider.RenameObjectRequest
 }
 
 func (f *fakeObjectStorageProvider) Type() provider.Type {
@@ -575,7 +697,51 @@ func (f *fakeObjectStorageProvider) Detect(_ context.Context, _ provider.Credent
 
 func (f *fakeObjectStorageProvider) ListObjects(_ context.Context, req provider.ListObjectsRequest) ([]provider.ObjectInfo, error) {
 	f.lastRequest = req
-	return f.objects, nil
+	normalizedPrefix := strings.TrimSpace(req.Prefix)
+	if f.listErrors != nil {
+		if err, ok := f.listErrors[normalizedPrefix]; ok {
+			return nil, err
+		}
+	}
+
+	filtered := make([]provider.ObjectInfo, 0, len(f.objects))
+	for _, object := range f.objects {
+		if normalizedPrefix == "" || strings.HasPrefix(object.Key, normalizedPrefix) {
+			filtered = append(filtered, object)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+
+	startIndex := 0
+	marker := strings.TrimSpace(req.Marker)
+	if marker != "" {
+		found := false
+		for idx := range filtered {
+			if filtered[idx].Key == marker {
+				startIndex = idx + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, nil
+		}
+	}
+	if startIndex >= len(filtered) {
+		return nil, nil
+	}
+
+	maxKeys := req.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = len(filtered)
+	}
+	endIndex := startIndex + maxKeys
+	if endIndex > len(filtered) {
+		endIndex = len(filtered)
+	}
+	return append([]provider.ObjectInfo(nil), filtered[startIndex:endIndex]...), nil
 }
 
 func (f *fakeObjectStorageProvider) UploadObject(_ context.Context, req provider.UploadObjectRequest) error {
@@ -597,6 +763,12 @@ func (f *fakeObjectStorageProvider) DeleteObject(_ context.Context, req provider
 
 func (f *fakeObjectStorageProvider) RenameObject(_ context.Context, req provider.RenameObjectRequest) error {
 	f.lastRename = req
+	f.renameRequests = append(f.renameRequests, req)
+	if f.renameErrors != nil {
+		if err, ok := f.renameErrors[req.SourceKey]; ok {
+			return err
+		}
+	}
 	return nil
 }
 
