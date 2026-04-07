@@ -699,7 +699,10 @@ func (h *Handler) BatchDeleteObjects(ctx *gin.Context) {
 				FailedObjects:  item.FailedObjects,
 			})
 			h.recordAudit(ctx, projectID, "object.delete", "object", item.Key, model.AuditResultSuccess, gin.H{
-				"batch": true,
+				"batch":          true,
+				"targetType":     item.TargetType,
+				"deletedObjects": item.DeletedObjects,
+				"failedObjects":  item.FailedObjects,
 			})
 			continue
 		}
@@ -715,9 +718,12 @@ func (h *Handler) BatchDeleteObjects(ctx *gin.Context) {
 			Reason:         item.Message,
 		})
 		h.recordAudit(ctx, projectID, "object.delete", "object", item.Key, model.AuditResultFailure, gin.H{
-			"batch":     true,
-			"errorCode": item.ErrorCode,
-			"error":     item.Message,
+			"batch":          true,
+			"targetType":     item.TargetType,
+			"deletedObjects": item.DeletedObjects,
+			"failedObjects":  item.FailedObjects,
+			"errorCode":      item.ErrorCode,
+			"error":          item.Message,
 		})
 	}
 
