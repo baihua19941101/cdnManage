@@ -136,68 +136,6 @@ func TestServiceCreateAllowsMixedProviderBindings(t *testing.T) {
 	suffix := uniqueSuffix()
 
 	project, err := service.Create(ctx, CreateProjectInput{
-		Name:        "mixed-provider-" + suffix,
-		Description: "allow mixed provider bindings in one project",
-		Buckets: []ProjectBucketInput{
-			{
-				ProviderType: "aliyun",
-				BucketName:   "bucket-aliyun-" + suffix,
-				Region:       "cn-hangzhou",
-				Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
-				IsPrimary:    true,
-			},
-			{
-				ProviderType: "tencent_cloud",
-				BucketName:   "bucket-tencent-" + suffix,
-				Region:       "ap-guangzhou",
-				Credential:   `{"accessKeyId":"AKID_TEST","accessKeySecret":"secret"}`,
-				IsPrimary:    false,
-			},
-		},
-		CDNs: []ProjectCDNInput{
-			{
-				ProviderType: "aliyun",
-				CDNEndpoint:  "https://cdn-aliyun-" + suffix + ".example.com",
-				Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
-				PurgeScope:   "url",
-				IsPrimary:    true,
-			},
-			{
-				ProviderType: "tencent_cloud",
-				CDNEndpoint:  "https://cdn-tencent-" + suffix + ".example.com",
-				Credential:   `{"accessKeyId":"AKID_TEST","accessKeySecret":"secret"}`,
-				PurgeScope:   "url",
-				IsPrimary:    false,
-			},
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, project.Buckets, 2)
-	require.Len(t, project.CDNs, 2)
-
-	bucketProviders := map[string]struct{}{}
-	for _, bucket := range project.Buckets {
-		bucketProviders[bucket.ProviderType] = struct{}{}
-	}
-	require.Contains(t, bucketProviders, "aliyun")
-	require.Contains(t, bucketProviders, "tencent_cloud")
-
-	cdnProviders := map[string]struct{}{}
-	for _, cdn := range project.CDNs {
-		cdnProviders[cdn.ProviderType] = struct{}{}
-	}
-	require.Contains(t, cdnProviders, "aliyun")
-	require.Contains(t, cdnProviders, "tencent_cloud")
-}
-
-func TestServiceCreateAllowsMixedProviderBindings(t *testing.T) {
-	db := newTestDB(t)
-	store := repository.NewGormStore(db)
-	service := NewService(store.Projects(), repository.NewGormTxManager(db))
-	ctx := context.Background()
-	suffix := uniqueSuffix()
-
-	project, err := service.Create(ctx, CreateProjectInput{
 		Name:        "mixed-provider-create-" + suffix,
 		Description: "allow mixed provider bindings in one project",
 		Buckets: []ProjectBucketInput{
