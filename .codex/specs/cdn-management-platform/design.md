@@ -83,7 +83,7 @@ flowchart LR
 - `projects`
   - 项目列表、项目详情、项目配置编辑。
 - `storage`
-  - 存储桶文件列表、上传、下载、删除、重命名、审计查询入口。
+  - 存储桶层级文件浏览、上传、下载、删除、重命名、审计查询入口。
 - `cdn`
   - CDN 地址管理、目录刷新、URL 刷新、资源同步。
 - `users`
@@ -174,20 +174,23 @@ RBAC 规则：
 职责：
 
 - 存储桶连接校验
-- 文件列表查询
+- 分层目录文件列表查询与分页
 - 上传、下载、删除、重命名
 - 自动识别云厂商
 - 压缩包上传会话跟踪与汇总
+- 批量删除编排与逐文件结果汇总
 
 主要接口：
 
 - `POST /api/v1/storage/connections/validate`
 - `GET /api/v1/projects/:id/storage/objects`
+- `GET /api/v1/projects/:id/storage/objects/tree`
 - `POST /api/v1/projects/:id/storage/upload`
 - `GET /api/v1/projects/:id/storage/upload-sessions`
 - `GET /api/v1/projects/:id/storage/upload-sessions/:sessionId`
 - `GET /api/v1/projects/:id/storage/download`
 - `DELETE /api/v1/projects/:id/storage/objects`
+- `DELETE /api/v1/projects/:id/storage/objects/batch`
 - `PUT /api/v1/projects/:id/storage/rename`
 
 Provider 抽象建议：
@@ -429,6 +432,17 @@ erDiagram
   - `failed_entries`
   - `status`
 
+#### `storage_tree_entry`（接口响应逻辑模型）
+
+- 用于表达当前层级目录中的条目。
+- 建议字段：
+  - `name`
+  - `path`
+  - `type`（`file` 或 `directory`）
+  - `size`
+  - `last_modified`
+  - `content_type`
+
 ### Security and Secret Management
 
 敏感数据处理：
@@ -477,6 +491,8 @@ erDiagram
   - 对象存储或 CDN 厂商操作失败
 - `UPLOAD_ARCHIVE_PROCESSING_FAILED`
   - 压缩包解析或条目处理失败
+- `INVALID_BATCH_OPERATION`
+  - 批量操作请求参数不合法或目标类型不支持
 - `RESOURCE_NOT_FOUND`
   - 项目、用户、对象、绑定配置不存在
 - `CONFLICT_ERROR`
@@ -505,6 +521,7 @@ erDiagram
 - 越权与认证失败要分别记录，便于审计分析。
 - 文件上传与同步失败时，响应中返回可追踪请求编号。
 - 压缩包上传失败时，响应中返回上传会话标识与失败条目摘要。
+- 批量删除返回逐文件结果时，必须区分成功、失败及失败原因。
 
 ## Testing Strategy
 
@@ -519,6 +536,8 @@ erDiagram
 - Provider 抽象层的参数组装与错误映射
 - 审计日志写入触发条件
 - 存储桶文件操作服务逻辑
+- 层级目录列表分页与目录导航逻辑
+- 批量删除结果聚合逻辑
 - 压缩包上传会话聚合与耗时计算逻辑
 - CDN 刷新与资源同步编排逻辑
 
@@ -539,6 +558,7 @@ erDiagram
 - 基于权限的菜单与按钮可见性
 - 项目切换后的数据隔离
 - 上传、删除、重命名、刷新等关键交互流程
+- 文件树层级导航、每页条数切换与批量删除交互流程
 - 压缩包上传会话进展、耗时与汇总信息展示
 - 三套主题切换是否正确应用
 
@@ -573,3 +593,4 @@ erDiagram
 - Requirement 9: 由分层架构、Provider 抽象、Redis 策略与数据模型拆分覆盖
 - Requirement 10: 由 User and RBAC Component 的管理员重置密码接口、审计写入与前端用户管理页面交互覆盖
 - Requirement 11: 由 Storage Component 的压缩包上传会话跟踪、审计汇总聚合与前端上传结果视图覆盖
+- Requirement 12: 由 Storage Component 的层级目录列表、分页控制、批量删除与单文件重命名约束覆盖
