@@ -95,19 +95,31 @@ type DeleteBucketObjectsInput struct {
 }
 
 type DeleteBucketObjectResult struct {
-	Key       string
-	TargetType string
-	Success   bool
+	Key            string
+	TargetType     string
+	Success        bool
 	DeletedObjects int
 	FailedObjects  int
-	ErrorCode string
-	Message   string
+	ErrorCode      string
+	Message        string
 }
 
 type RenameBucketObjectInput struct {
 	BucketName string
 	SourceKey  string
 	TargetKey  string
+}
+
+type RenameBucketObjectResult struct {
+	SourceKey       string
+	TargetKey       string
+	TargetType      string
+	Success         bool
+	MigratedObjects int
+	FailedObjects   int
+	FailureReasons  []string
+	ErrorCode       string
+	Message         string
 }
 
 type RefreshURLsInput struct {
@@ -391,11 +403,11 @@ func (s *Service) DeleteBucketObjectWithResult(ctx context.Context, projectID ui
 		return DeleteBucketObjectResult{}, mapObjectStorageOperationError(err, "delete")
 	}
 	return DeleteBucketObjectResult{
-		Key:           key,
-		TargetType:    "file",
-		Success:       true,
+		Key:            key,
+		TargetType:     "file",
+		Success:        true,
 		DeletedObjects: 1,
-		Message:       "object deleted",
+		Message:        "object deleted",
 	}, nil
 }
 
@@ -555,25 +567,163 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 	return results, nil
 }
 
-func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, input RenameBucketObjectInput) error {
+func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, input RenameBucketObjectInput) (RenameBucketObjectResult, error) {
 	bucket, storageProvider, credentialPayload, err := s.resolveBucketProviderAndCredential(ctx, projectID, strings.TrimSpace(input.BucketName))
 	if err != nil {
-		return err
+		return RenameBucketObjectResult{}, err
 	}
-	if strings.TrimSpace(input.SourceKey) == "" || strings.TrimSpace(input.TargetKey) == "" {
-		return httpresp.NewAppError(400, "validation_error", "sourceKey and targetKey are required", nil)
+	sourceKey := strings.TrimSpace(input.SourceKey)
+	targetKey := strings.TrimSpace(input.TargetKey)
+	if sourceKey == "" || targetKey == "" {
+		return RenameBucketObjectResult{}, httpresp.NewAppError(400, "validation_error", "sourceKey and targetKey are required", nil)
+	}
+
+	if strings.HasSuffix(sourceKey, "/") {
+		return s.renameDirectoryRecursively(ctx, storageProvider, provider.RenameObjectRequest{
+			Bucket:     bucket.BucketName,
+			Region:     bucket.Region,
+			SourceKey:  sourceKey,
+			TargetKey:  targetKey,
+			Credential: credentialPayload,
+		})
 	}
 
 	if err := storageProvider.RenameObject(ctx, provider.RenameObjectRequest{
 		Bucket:     bucket.BucketName,
 		Region:     bucket.Region,
-		SourceKey:  strings.TrimSpace(input.SourceKey),
-		TargetKey:  strings.TrimSpace(input.TargetKey),
+		SourceKey:  sourceKey,
+		TargetKey:  targetKey,
 		Credential: credentialPayload,
 	}); err != nil {
-		return mapObjectStorageOperationError(err, "rename")
+		return RenameBucketObjectResult{}, mapObjectStorageOperationError(err, "rename")
 	}
-	return nil
+	return RenameBucketObjectResult{
+		SourceKey:       sourceKey,
+		TargetKey:       targetKey,
+		TargetType:      "file",
+		Success:         true,
+		MigratedObjects: 1,
+		Message:         "object renamed",
+	}, nil
+}
+
+func (s *Service) renameDirectoryRecursively(
+	ctx context.Context,
+	storageProvider provider.ObjectStorageProvider,
+	request provider.RenameObjectRequest,
+) (RenameBucketObjectResult, error) {
+	sourcePrefix := ensureDirectoryPrefix(request.SourceKey)
+	targetPrefix := ensureDirectoryPrefix(request.TargetKey)
+	if sourcePrefix == "" || targetPrefix == "" {
+		return RenameBucketObjectResult{}, httpresp.NewAppError(400, "validation_error", "directory sourceKey and targetKey are required", nil)
+	}
+	if sourcePrefix == targetPrefix {
+		return RenameBucketObjectResult{}, httpresp.NewAppError(400, "validation_error", "directory sourceKey and targetKey must be different", nil)
+	}
+
+	result := RenameBucketObjectResult{
+		SourceKey:      sourcePrefix,
+		TargetKey:      targetPrefix,
+		TargetType:     "directory",
+		Success:        true,
+		FailureReasons: make([]string, 0, 3),
+	}
+
+	queue := []string{sourcePrefix}
+	visitedDirectories := make(map[string]struct{}, 8)
+	processedObjects := make(map[string]struct{}, 64)
+	const maxKeys = 200
+
+	for len(queue) > 0 {
+		currentPrefix := queue[0]
+		queue = queue[1:]
+		if _, ok := visitedDirectories[currentPrefix]; ok {
+			continue
+		}
+		visitedDirectories[currentPrefix] = struct{}{}
+
+		marker := ""
+		for {
+			objects, err := storageProvider.ListObjects(ctx, provider.ListObjectsRequest{
+				Bucket:     request.Bucket,
+				Region:     request.Region,
+				Prefix:     currentPrefix,
+				Marker:     marker,
+				MaxKeys:    maxKeys,
+				Credential: request.Credential,
+			})
+			if err != nil {
+				return RenameBucketObjectResult{}, mapObjectStorageListError(err)
+			}
+			if len(objects) == 0 {
+				break
+			}
+
+			lastMarker := marker
+			for _, object := range objects {
+				lastMarker = object.Key
+				if object.IsDir {
+					normalized := ensureDirectoryPrefix(object.Key)
+					if normalized != "" {
+						queue = append(queue, normalized)
+					}
+					continue
+				}
+				if _, duplicated := processedObjects[object.Key]; duplicated {
+					continue
+				}
+				processedObjects[object.Key] = struct{}{}
+
+				if !strings.HasPrefix(object.Key, sourcePrefix) {
+					continue
+				}
+
+				relativePath := strings.TrimPrefix(object.Key, sourcePrefix)
+				targetObjectKey := targetPrefix + relativePath
+				err = storageProvider.RenameObject(ctx, provider.RenameObjectRequest{
+					Bucket:     request.Bucket,
+					Region:     request.Region,
+					SourceKey:  object.Key,
+					TargetKey:  targetObjectKey,
+					Credential: request.Credential,
+				})
+				if err != nil {
+					result.Success = false
+					result.FailedObjects++
+					if len(result.FailureReasons) < 3 {
+						result.FailureReasons = append(result.FailureReasons, object.Key+": "+mapObjectStorageOperationError(err, "rename").Error())
+					}
+					continue
+				}
+				result.MigratedObjects++
+			}
+
+			if len(objects) < maxKeys || strings.TrimSpace(lastMarker) == "" || lastMarker == marker {
+				break
+			}
+			marker = lastMarker
+		}
+	}
+
+	if result.Success {
+		result.Message = "directory renamed"
+		return result, nil
+	}
+
+	result.ErrorCode = "provider_operation_failed"
+	result.Message = "directory rename partially failed"
+	return result, nil
+}
+
+func ensureDirectoryPrefix(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasSuffix(trimmed, "/") {
+		return trimmed
+	}
+	return trimmed + "/"
 }
 
 func (s *Service) RefreshURLs(ctx context.Context, projectID uint64, input RefreshURLsInput) (provider.TaskResult, error) {

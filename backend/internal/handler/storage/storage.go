@@ -167,8 +167,24 @@ type batchDeleteObjectResponse struct {
 }
 
 type deleteObjectResponse struct {
-	Message string                       `json:"message"`
-	Summary batchDeleteObjectItemResult  `json:"summary"`
+	Message string                      `json:"message"`
+	Summary batchDeleteObjectItemResult `json:"summary"`
+}
+
+type renameObjectSummary struct {
+	SourceKey       string   `json:"sourceKey"`
+	TargetKey       string   `json:"targetKey"`
+	TargetType      string   `json:"targetType"`
+	Result          string   `json:"result"`
+	MigratedObjects int      `json:"migratedObjects,omitempty"`
+	FailedObjects   int      `json:"failedObjects,omitempty"`
+	ErrorCode       string   `json:"errorCode,omitempty"`
+	FailureReasons  []string `json:"failureReasons,omitempty"`
+}
+
+type renameObjectResponse struct {
+	Message string              `json:"message"`
+	Summary renameObjectSummary `json:"summary"`
 }
 
 func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64) *Handler {
@@ -747,7 +763,7 @@ func (h *Handler) RenameObject(ctx *gin.Context) {
 		return
 	}
 
-	err = h.projectService.RenameBucketObject(ctx.Request.Context(), projectID, serviceprojects.RenameBucketObjectInput{
+	result, err := h.projectService.RenameBucketObject(ctx.Request.Context(), projectID, serviceprojects.RenameBucketObjectInput{
 		BucketName: req.BucketName,
 		SourceKey:  req.SourceKey,
 		TargetKey:  req.TargetKey,
@@ -758,8 +774,37 @@ func (h *Handler) RenameObject(ctx *gin.Context) {
 		return
 	}
 
-	h.recordAudit(ctx, projectID, "object.rename", "object", req.SourceKey+" -> "+req.TargetKey, model.AuditResultSuccess, nil)
-	httpresp.Success(ctx, gin.H{"message": "object renamed"})
+	auditResult := model.AuditResultSuccess
+	if !result.Success {
+		auditResult = model.AuditResultFailure
+	}
+	h.recordAudit(ctx, projectID, "object.rename", "object", req.SourceKey+" -> "+req.TargetKey, auditResult, gin.H{
+		"targetType":      result.TargetType,
+		"migratedObjects": result.MigratedObjects,
+		"failedObjects":   result.FailedObjects,
+		"failureReasons":  result.FailureReasons,
+		"errorCode":       result.ErrorCode,
+	})
+
+	response := renameObjectResponse{
+		Message: result.Message,
+		Summary: renameObjectSummary{
+			SourceKey:       result.SourceKey,
+			TargetKey:       result.TargetKey,
+			TargetType:      result.TargetType,
+			MigratedObjects: result.MigratedObjects,
+			FailedObjects:   result.FailedObjects,
+			ErrorCode:       result.ErrorCode,
+			FailureReasons:  result.FailureReasons,
+		},
+	}
+	if result.Success {
+		response.Summary.Result = "success"
+	} else {
+		response.Summary.Result = "failure"
+	}
+
+	httpresp.Success(ctx, response)
 }
 
 func projectIDFromParam(ctx *gin.Context) (uint64, error) {

@@ -136,6 +136,22 @@ type DeleteObjectPayload = {
   summary?: DeleteObjectSummary
 }
 
+type RenameObjectSummary = {
+  sourceKey?: string
+  targetKey?: string
+  targetType?: string
+  result?: string
+  migratedObjects?: number
+  failedObjects?: number
+  errorCode?: string
+  failureReasons?: string[]
+}
+
+type RenameObjectPayload = {
+  message?: string
+  summary?: RenameObjectSummary
+}
+
 type UploadSessionSummary = {
   sessionId: string
   startedAt: string
@@ -174,6 +190,26 @@ const parentDirectoryPrefix = (prefix: string): string => {
     return ''
   }
   return withoutTrailingSlash.slice(0, lastSlashIndex + 1)
+}
+
+const remapCurrentPrefixAfterDirectoryRename = (
+  currentPrefix: string,
+  sourceKey: string,
+  targetKey: string,
+): string => {
+  const normalizedCurrent = normalizeDirectoryPrefix(currentPrefix)
+  const normalizedSource = normalizeDirectoryPrefix(sourceKey)
+  const normalizedTarget = normalizeDirectoryPrefix(targetKey)
+  if (!normalizedCurrent || !normalizedSource || !normalizedTarget) {
+    return normalizedCurrent
+  }
+  if (normalizedCurrent === normalizedSource) {
+    return normalizedTarget
+  }
+  if (normalizedCurrent.startsWith(normalizedSource)) {
+    return `${normalizedTarget}${normalizedCurrent.slice(normalizedSource.length)}`
+  }
+  return normalizedCurrent
 }
 
 const objectDisplayName = (key: string, currentPrefix: string, isDir: boolean): string => {
@@ -669,6 +705,7 @@ export function StoragePage() {
 
   const [renameVisible, setRenameVisible] = useState(false)
   const [renamingSourceKey, setRenamingSourceKey] = useState('')
+  const [renamingTargetType, setRenamingTargetType] = useState<'file' | 'directory'>('file')
 
   const [auditVisible, setAuditVisible] = useState(false)
   const [auditLogs, setAuditLogs] = useState<StorageAuditLog[]>([])
@@ -1092,12 +1129,14 @@ export function StoragePage() {
     }
   }
 
-  const openRename = (sourceKey: string) => {
+  const openRename = (sourceKey: string, isDirectory: boolean) => {
     if (!canWrite) {
       return
     }
-    setRenamingSourceKey(sourceKey)
-    renameForm.setFieldsValue({ targetKey: sourceKey })
+    const normalizedSourceKey = isDirectory ? normalizeDirectoryPrefix(sourceKey) : sourceKey
+    setRenamingTargetType(isDirectory ? 'directory' : 'file')
+    setRenamingSourceKey(normalizedSourceKey)
+    renameForm.setFieldsValue({ targetKey: normalizedSourceKey })
     setRenameVisible(true)
   }
 
@@ -1111,17 +1150,64 @@ export function StoragePage() {
       return
     }
     const values = await renameForm.validateFields()
+    const targetKey =
+      renamingTargetType === 'directory'
+        ? normalizeDirectoryPrefix(values.targetKey)
+        : values.targetKey.trim()
+    if (!targetKey) {
+      messageApi.error(
+        renamingTargetType === 'directory' ? '目标目录前缀不能为空。' : '目标对象 Key 不能为空。',
+      )
+      return
+    }
+    if (renamingTargetType === 'directory') {
+      renameForm.setFieldsValue({ targetKey })
+    }
 
     setSubmitting(true)
     try {
-      await apiClient.put(`/projects/${projectID}/storage/rename`, {
+      const response = await apiClient.put<ApiResponse<RenameObjectPayload>>(`/projects/${projectID}/storage/rename`, {
         bucketName,
         sourceKey: renamingSourceKey,
-        targetKey: values.targetKey.trim(),
+        targetKey,
       })
-      messageApi.success('重命名成功。')
+      const payload = response.data?.data
+      const summary = payload?.summary
+      const targetType =
+        normalizeString(summary?.targetType) || renamingTargetType
+      const migratedObjects = toNonNegativeNumber(summary?.migratedObjects) ?? 0
+      const failedObjects = toNonNegativeNumber(summary?.failedObjects) ?? 0
+      const failureReasons = Array.isArray(summary?.failureReasons)
+        ? summary?.failureReasons
+            .map((item) => normalizeString(item))
+            .filter((item) => item.length > 0)
+        : []
+      const failedReasonText = failureReasons.slice(0, 3).join('；')
+
+      if (targetType === 'directory') {
+        if (failedObjects > 0 || normalizeString(summary?.result) === 'failure') {
+          messageApi.warning(
+            `目录重命名完成：迁移 ${migratedObjects}，失败 ${failedObjects}${failedReasonText ? `。失败摘要：${failedReasonText}` : ''}`,
+          )
+        } else {
+          messageApi.success(`目录重命名成功：迁移 ${migratedObjects} 个对象。`)
+        }
+      } else {
+        messageApi.success(payload?.message || '重命名成功。')
+      }
+
       setRenameVisible(false)
-      await queryObjects()
+      if (targetType === 'directory') {
+        const nextPrefix = remapCurrentPrefixAfterDirectoryRename(
+          currentPrefix,
+          renamingSourceKey,
+          targetKey,
+        )
+        queryForm.setFieldValue('prefix', nextPrefix)
+        await queryObjects(undefined, nextPrefix)
+      } else {
+        await queryObjects()
+      }
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '重命名失败。'))
     } finally {
@@ -1331,7 +1417,7 @@ export function StoragePage() {
           <Button
             icon={<EditOutlined />}
             size="small"
-            onClick={() => openRename(record.key)}
+            onClick={() => openRename(record.key, record.isDir)}
             disabled={!canWrite}
           >
             重命名
@@ -1715,7 +1801,7 @@ export function StoragePage() {
       </Space>
 
       <Modal
-        title="重命名对象"
+        title={renamingTargetType === 'directory' ? '重命名目录' : '重命名对象'}
         open={renameVisible}
         onCancel={() => setRenameVisible(false)}
         onOk={() => void submitRename()}
@@ -1723,13 +1809,27 @@ export function StoragePage() {
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">源对象：{renamingSourceKey}</Typography.Paragraph>
+        {renamingTargetType === 'directory' ? (
+          <Typography.Paragraph type="secondary">
+            目录重命名会迁移该目录前缀下全部对象到目标目录前缀。
+          </Typography.Paragraph>
+        ) : null}
         <Form<RenameFormValues> form={renameForm} layout="vertical">
           <Form.Item
             name="targetKey"
-            label="目标对象 Key"
+            label={renamingTargetType === 'directory' ? '目标目录前缀' : '目标对象 Key'}
             rules={[
-              { required: true, message: '请输入目标对象 Key' },
-              { min: 1, message: '目标对象 Key 不能为空' },
+              {
+                required: true,
+                message: renamingTargetType === 'directory' ? '请输入目标目录前缀' : '请输入目标对象 Key',
+              },
+              {
+                min: 1,
+                message:
+                  renamingTargetType === 'directory'
+                    ? '目标目录前缀不能为空'
+                    : '目标对象 Key 不能为空',
+              },
             ]}
           >
             <Input />
