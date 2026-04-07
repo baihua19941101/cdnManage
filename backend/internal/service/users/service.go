@@ -36,6 +36,8 @@ type ProjectBindingInput struct {
 	ProjectRole string
 }
 
+const minPasswordLength = 8
+
 func NewService(users repository.UserRepository, projects repository.ProjectRepository, tx repository.TxManager) *Service {
 	return &Service{
 		users:    users,
@@ -115,6 +117,29 @@ func (s *Service) Delete(ctx context.Context, userID uint64) error {
 		}
 		return nil
 	})
+}
+
+func (s *Service) ResetPassword(ctx context.Context, userID uint64, newPassword string) error {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return httpresp.NewAppError(404, "user_not_found", "user not found", nil)
+	}
+
+	if len(newPassword) < minPasswordLength {
+		return httpresp.NewAppError(400, "password_policy_violation", "new password must be at least 8 characters", map[string]interface{}{"minLength": minPasswordLength})
+	}
+
+	passwordHash, err := serviceauth.HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash reset password: %w", err)
+	}
+
+	user.PasswordHash = passwordHash
+	if err := s.users.Update(ctx, user); err != nil {
+		return fmt.Errorf("update user password: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Service) ReplaceProjectBindings(ctx context.Context, userID uint64, bindings []ProjectBindingInput) ([]model.UserProjectRole, error) {

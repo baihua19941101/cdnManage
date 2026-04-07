@@ -33,6 +33,10 @@ type updateUserRequest struct {
 	PlatformRole string `json:"platformRole" binding:"required"`
 }
 
+type resetPasswordRequest struct {
+	NewPassword string `json:"newPassword" binding:"required,min=8"`
+}
+
 type replaceBindingsRequest struct {
 	Bindings []projectBindingRequest `json:"bindings"`
 }
@@ -68,6 +72,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	group.GET("", handler.List)
 	group.POST("", handler.Create)
 	group.PUT("/:id", handler.Update)
+	group.PUT("/:id/password", handler.ResetPassword)
 	group.DELETE("/:id", handler.Delete)
 	group.PUT("/:id/project-bindings", handler.ReplaceProjectBindings)
 }
@@ -149,6 +154,27 @@ func (h *Handler) Delete(ctx *gin.Context) {
 	}
 
 	httpresp.Success(ctx, gin.H{"message": "user deleted"})
+}
+
+func (h *Handler) ResetPassword(ctx *gin.Context) {
+	userID, err := userIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	var req resetPasswordRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid reset password request", gin.H{"error": err.Error()}))
+		return
+	}
+
+	if err := h.service.ResetPassword(ctx.Request.Context(), userID, req.NewPassword); err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	httpresp.Success(ctx, gin.H{"message": "password reset"})
 }
 
 func (h *Handler) ReplaceProjectBindings(ctx *gin.Context) {
