@@ -25,6 +25,7 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import type { TableRowSelection } from 'antd/es/table/interface'
 import type { UploadFile } from 'antd/es/upload/interface'
 import { useEffect, useState } from 'react'
 
@@ -98,6 +99,23 @@ type ArchiveSummary = {
 type UploadFailureReasonItem = {
   fileName: string
   reason: string
+}
+
+type BatchDeleteItemResult = {
+  key: string
+  result: string
+  errorCode?: string
+  reason?: string
+}
+
+type BatchDeletePayload = {
+  message?: string
+  summary?: {
+    total?: number
+    success?: number
+    failure?: number
+  }
+  results?: BatchDeleteItemResult[]
 }
 
 type UploadSessionSummary = {
@@ -625,6 +643,7 @@ export function StoragePage() {
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
+  const [selectedObjectKeys, setSelectedObjectKeys] = useState<React.Key[]>([])
 
   const [pendingUploadFiles, setPendingUploadFiles] = useState<UploadFile[]>([])
   const [uploadKey, setUploadKey] = useState('')
@@ -702,6 +721,7 @@ export function StoragePage() {
 
     setLoading(true)
     setQueryError(null)
+    setSelectedObjectKeys([])
     try {
       const response = await apiClient.get<ApiResponse<{ objects: ObjectItem[] }>>(
         `/projects/${projectID}/storage/objects`,
@@ -946,6 +966,68 @@ export function StoragePage() {
       await queryObjects()
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '删除失败。'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const deleteSelectedObjects = async () => {
+    if (!canWrite) {
+      return
+    }
+
+    const { projectID, bucketName } = getQuery()
+    if (!projectID || !bucketName) {
+      messageApi.error('请先填写并查询 Project ID 与 BucketName。')
+      return
+    }
+
+    const keys = selectedObjectKeys
+      .map((item) => String(item).trim())
+      .filter((item) => item !== '')
+    if (keys.length === 0) {
+      messageApi.warning('请先选择要删除的文件。')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const response = await apiClient.delete<ApiResponse<BatchDeletePayload>>(
+        `/projects/${projectID}/storage/objects/batch`,
+        {
+          data: {
+            bucketName,
+            keys,
+          },
+        },
+      )
+      const payload = response.data?.data
+      const summary = payload?.summary
+      const success = toNonNegativeNumber(summary?.success) ?? 0
+      const failure = toNonNegativeNumber(summary?.failure) ?? 0
+
+      const failedItems = Array.isArray(payload?.results)
+        ? payload!.results!.filter((item) => normalizeString(item.result) !== 'success').slice(0, 3)
+        : []
+      const failedText = failedItems
+        .map((item, index) => {
+          const reason = normalizeString(item.reason) || normalizeString(item.errorCode) || 'unknown error'
+          return `${index + 1}. ${item.key}: ${reason}`
+        })
+        .join('；')
+
+      if (failure > 0) {
+        messageApi.warning(
+          `批量删除完成：成功 ${success}，失败 ${failure}${failedText ? `。失败摘要：${failedText}` : ''}`,
+        )
+      } else {
+        messageApi.success(`批量删除完成：成功 ${success}，失败 0`)
+      }
+
+      setSelectedObjectKeys([])
+      await queryObjects()
+    } catch (error) {
+      messageApi.error(resolveAPIErrorMessage(error, '批量删除失败。'))
     } finally {
       setSubmitting(false)
     }
@@ -1196,16 +1278,16 @@ export function StoragePage() {
             重命名
           </Button>
           <Popconfirm
-            title="确认删除该对象？"
+            title={record.isDir ? '目录不支持直接删除' : '确认删除该对象？'}
             onConfirm={() => void deleteObject(record.key)}
             okButtonProps={{ loading: submitting }}
-            disabled={!canWrite}
+            disabled={!canWrite || record.isDir}
           >
             <Button
               danger
               icon={<DeleteOutlined />}
               size="small"
-              disabled={!canWrite}
+              disabled={!canWrite || record.isDir}
             >
               删除
             </Button>
@@ -1221,6 +1303,15 @@ export function StoragePage() {
       ),
     },
   ]
+
+  const rowSelection: TableRowSelection<ObjectItem> = {
+    selectedRowKeys: selectedObjectKeys,
+    onChange: (keys) => setSelectedObjectKeys(keys),
+    getCheckboxProps: (record) => ({
+      disabled: record.isDir || !canWrite,
+    }),
+    preserveSelectedRowKeys: false,
+  }
 
   const sessionColumns: ColumnsType<UploadSessionSummary> = [
     {
@@ -1358,6 +1449,7 @@ export function StoragePage() {
                   queryForm.setFieldValue('prefix', '')
                   setCurrentPrefix('')
                   setObjects([])
+                  setSelectedObjectKeys([])
                   setActiveSession(null)
                   setSessionDetailLogs([])
                 }}
@@ -1387,6 +1479,7 @@ export function StoragePage() {
                   queryForm.setFieldValue('prefix', '')
                   setCurrentPrefix('')
                   setObjects([])
+                  setSelectedObjectKeys([])
                 }}
               />
             </Form.Item>
@@ -1520,6 +1613,20 @@ export function StoragePage() {
               <Button onClick={() => void goToParentDirectory()} disabled={!currentPrefix || loading}>
                 返回上一级
               </Button>
+              <Popconfirm
+                title={`确认删除已选 ${selectedObjectKeys.length} 个文件？`}
+                onConfirm={() => void deleteSelectedObjects()}
+                okButtonProps={{ loading: submitting }}
+                disabled={!canWrite || selectedObjectKeys.length === 0}
+              >
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={!canWrite || selectedObjectKeys.length === 0}
+                >
+                  批量删除
+                </Button>
+              </Popconfirm>
             </Space>
           }
         >
@@ -1527,6 +1634,7 @@ export function StoragePage() {
             rowKey="key"
             columns={columns}
             dataSource={objects}
+            rowSelection={rowSelection}
             loading={loading}
             pagination={{
               current: objectCurrentPage,
