@@ -139,6 +139,7 @@ func auditLogFilterFromQuery(ctx *gin.Context, projectID *uint64) (repository.Au
 		Action:           ctx.Query("action"),
 		TargetType:       ctx.Query("targetType"),
 		TargetIdentifier: ctx.Query("targetIdentifier"),
+		SessionID:        ctx.Query("sessionId"),
 		Result:           ctx.Query("result"),
 		CreatedAfter:     createdAfter,
 		CreatedBefore:    createdBefore,

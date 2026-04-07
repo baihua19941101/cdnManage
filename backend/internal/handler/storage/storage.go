@@ -291,6 +291,13 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 	var archiveSummary *uploadArchiveSummary
 	var archiveSessionID string
 	var archiveStartedAt time.Time
+	ensureArchiveSession := func() {
+		archiveSummary = ensureArchiveSummary(archiveSummary)
+		if archiveSessionID == "" {
+			archiveStartedAt = time.Now().UTC()
+			archiveSessionID = newArchiveUploadSessionID(archiveStartedAt)
+		}
+	}
 
 	for _, fileHeader := range fileHeaders {
 		fileName := ""
@@ -322,6 +329,10 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			if archiveFormatByName != "" {
 				reason = "archive could not be opened"
 				metadata["archive"] = true
+				ensureArchiveSession()
+				archiveSummary.ArchivesProcessed++
+				archiveSummary.Failed++
+				metadata["sessionId"] = archiveSessionID
 			}
 			appendUploadResult(&results, &summary, uploadObjectItemResult{
 				FileName: fileName,
@@ -335,27 +346,42 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		archiveFormat, detectErr := detectArchiveFormat(fileHeader.Filename, file)
 		if detectErr != nil {
 			_ = file.Close()
+			metadata := gin.H{
+				"error":    detectErr.Error(),
+				"fileName": fileName,
+			}
+			if archiveFormatByName != "" {
+				ensureArchiveSession()
+				archiveSummary.ArchivesProcessed++
+				archiveSummary.Failed++
+				metadata["archive"] = true
+				metadata["sessionId"] = archiveSessionID
+			}
 			appendUploadResult(&results, &summary, uploadObjectItemResult{
 				FileName: fileName,
 				Result:   "failure",
 				Reason:   "file could not be read",
 			})
-			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, gin.H{
-				"error":    detectErr.Error(),
-				"fileName": fileName,
-			})
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget("", fileName), model.AuditResultFailure, metadata)
 			continue
 		}
 
 		if archiveFormat != "" {
-			archiveSummary = ensureArchiveSummary(archiveSummary)
+			ensureArchiveSession()
 			archiveSummary.ArchivesProcessed++
-			if archiveSessionID == "" {
-				archiveStartedAt = time.Now().UTC()
-				archiveSessionID = newArchiveUploadSessionID(archiveStartedAt)
-			}
 
-			stats := h.uploadArchiveEntries(ctx, projectID, bucketName, fileHeader, file, resolveArchiveUploadBaseKey(key, keyPrefix, len(fileHeaders)), archiveFormat, &results, &summary)
+			stats := h.uploadArchiveEntries(
+				ctx,
+				projectID,
+				bucketName,
+				fileHeader,
+				file,
+				resolveArchiveUploadBaseKey(key, keyPrefix, len(fileHeaders)),
+				archiveFormat,
+				archiveSessionID,
+				&results,
+				&summary,
+			)
 			archiveSummary.Extracted += stats.Extracted
 			archiveSummary.Uploaded += stats.Uploaded
 			archiveSummary.Failed += stats.Failed
@@ -381,7 +407,7 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		}
 		if h.isUploadSizeExceeded(fileHeader.Size) {
 			_ = file.Close()
-			h.recordUploadTooLarge(ctx, projectID, fileName, targetKey, fileHeader.Size, "", "")
+			h.recordUploadTooLarge(ctx, projectID, fileName, targetKey, fileHeader.Size, "", "", "")
 			appendUploadResult(&results, &summary, h.uploadTooLargeResult(fileName, targetKey, fileHeader.Size))
 			continue
 		}
@@ -445,6 +471,25 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		response.TotalEntries = &totalEntries
 		response.SuccessEntries = &successEntries
 		response.FailedEntries = &failedEntries
+
+		archiveAuditResult := model.AuditResultSuccess
+		if archiveSummary.Failed > 0 {
+			archiveAuditResult = model.AuditResultFailure
+		}
+		h.recordAudit(ctx, projectID, "object.upload_archive", "object", archiveSessionID, archiveAuditResult, gin.H{
+			"sessionId":         archiveSessionID,
+			"startedAt":         startedAtText,
+			"finishedAt":        finishedAtText,
+			"durationMs":        durationMs,
+			"archivesProcessed": archiveSummary.ArchivesProcessed,
+			"extracted":         archiveSummary.Extracted,
+			"uploaded":          archiveSummary.Uploaded,
+			"failed":            archiveSummary.Failed,
+			"skipped":           archiveSummary.Skipped,
+			"totalEntries":      totalEntries,
+			"successEntries":    successEntries,
+			"failedEntries":     failedEntries,
+		})
 	}
 
 	httpresp.Success(ctx, response)
@@ -517,6 +562,7 @@ func (h *Handler) ListAuditLogs(ctx *gin.Context) {
 		Action:           ctx.Query("action"),
 		TargetType:       "object",
 		TargetIdentifier: ctx.Query("path"),
+		SessionID:        strings.TrimSpace(ctx.Query("sessionId")),
 		Result:           ctx.Query("result"),
 		Limit:            limit,
 		Offset:           offset,
@@ -850,24 +896,25 @@ func (h *Handler) uploadArchiveEntries(
 	file multipart.File,
 	baseKey string,
 	archiveFormat string,
+	sessionID string,
 	results *[]uploadObjectItemResult,
 	summary *uploadObjectSummary,
 ) uploadArchiveSummary {
 	switch archiveFormat {
 	case "zip":
-		return h.uploadZipEntries(ctx, projectID, bucketName, fileHeader, file, baseKey, results, summary)
+		return h.uploadZipEntries(ctx, projectID, bucketName, fileHeader, file, baseKey, sessionID, results, summary)
 	case "tar":
-		return h.uploadTarEntries(ctx, projectID, bucketName, fileHeader.Filename, tar.NewReader(file), baseKey, results, summary)
+		return h.uploadTarEntries(ctx, projectID, bucketName, fileHeader.Filename, tar.NewReader(file), baseKey, sessionID, results, summary)
 	case "tar.gz":
 		gzipReader, err := gzip.NewReader(file)
 		if err != nil {
-			return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive could not be decompressed", err, results, summary)
+			return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive could not be decompressed", err, sessionID, results, summary)
 		}
 		defer gzipReader.Close()
 
-		return h.uploadTarEntries(ctx, projectID, bucketName, fileHeader.Filename, tar.NewReader(gzipReader), baseKey, results, summary)
+		return h.uploadTarEntries(ctx, projectID, bucketName, fileHeader.Filename, tar.NewReader(gzipReader), baseKey, sessionID, results, summary)
 	default:
-		return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive format is not supported", nil, results, summary)
+		return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive format is not supported", nil, sessionID, results, summary)
 	}
 }
 
@@ -878,12 +925,13 @@ func (h *Handler) uploadZipEntries(
 	fileHeader *multipart.FileHeader,
 	file multipart.File,
 	baseKey string,
+	sessionID string,
 	results *[]uploadObjectItemResult,
 	summary *uploadObjectSummary,
 ) uploadArchiveSummary {
 	reader, err := zip.NewReader(file, fileHeader.Size)
 	if err != nil {
-		return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive could not be decompressed", err, results, summary)
+		return h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, "", "", "archive could not be decompressed", err, sessionID, results, summary)
 	}
 
 	stats := uploadArchiveSummary{}
@@ -894,7 +942,7 @@ func (h *Handler) uploadZipEntries(
 			continue
 		}
 		if !entry.FileInfo().Mode().IsRegular() {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry type is not supported", nil, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry type is not supported", nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
@@ -902,14 +950,14 @@ func (h *Handler) uploadZipEntries(
 		stats.Extracted++
 		entryPath, sanitizeErr := sanitizeArchiveEntryPath(rawName)
 		if sanitizeErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", sanitizeErr.Error(), nil, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", sanitizeErr.Error(), nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
 
 		entryReader, openErr := entry.Open()
 		if openErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry could not be opened", openErr, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry could not be opened", openErr, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
@@ -919,7 +967,7 @@ func (h *Handler) uploadZipEntries(
 		if h.isUploadSizeExceeded(entrySize) {
 			_ = entryReader.Close()
 			appendUploadResult(results, summary, h.uploadTooLargeResult(archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize))
-			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize, fileHeader.Filename, rawName)
+			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize, fileHeader.Filename, rawName, sessionID)
 			stats.Failed++
 			continue
 		}
@@ -933,7 +981,7 @@ func (h *Handler) uploadZipEntries(
 		})
 		_ = entryReader.Close()
 		if uploadErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, targetKey, uploadErr.Error(), nil, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, targetKey, uploadErr.Error(), nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
@@ -948,6 +996,7 @@ func (h *Handler) uploadZipEntries(
 			"size":        int64(entry.UncompressedSize64),
 			"fileName":    entryPath,
 			"archiveFile": strings.TrimSpace(fileHeader.Filename),
+			"sessionId":   sessionID,
 		})
 	}
 
@@ -961,6 +1010,7 @@ func (h *Handler) uploadTarEntries(
 	archiveName string,
 	reader *tar.Reader,
 	baseKey string,
+	sessionID string,
 	results *[]uploadObjectItemResult,
 	summary *uploadObjectSummary,
 ) uploadArchiveSummary {
@@ -972,7 +1022,7 @@ func (h *Handler) uploadTarEntries(
 			return stats
 		}
 		if err != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, archiveName, "", "", "archive could not be decompressed", err, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, "", "", "archive could not be decompressed", err, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			return stats
 		}
@@ -983,7 +1033,7 @@ func (h *Handler) uploadTarEntries(
 			continue
 		}
 		if !header.FileInfo().Mode().IsRegular() {
-			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", "archive entry type is not supported", nil, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", "archive entry type is not supported", nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
@@ -991,7 +1041,7 @@ func (h *Handler) uploadTarEntries(
 		stats.Extracted++
 		entryPath, sanitizeErr := sanitizeArchiveEntryPath(rawName)
 		if sanitizeErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", sanitizeErr.Error(), nil, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, "", sanitizeErr.Error(), nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
@@ -999,7 +1049,7 @@ func (h *Handler) uploadTarEntries(
 		targetKey := joinObjectKey(baseKey, entryPath)
 		if h.isUploadSizeExceeded(header.Size) {
 			appendUploadResult(results, summary, h.uploadTooLargeResult(archiveResultFileName(archiveName, entryPath), targetKey, header.Size))
-			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(archiveName, entryPath), targetKey, header.Size, archiveName, rawName)
+			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(archiveName, entryPath), targetKey, header.Size, archiveName, rawName, sessionID)
 			stats.Failed++
 			continue
 		}
@@ -1012,7 +1062,7 @@ func (h *Handler) uploadTarEntries(
 			Size:        header.Size,
 		})
 		if uploadErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, targetKey, uploadErr.Error(), nil, results, summary)
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, targetKey, uploadErr.Error(), nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
@@ -1027,6 +1077,7 @@ func (h *Handler) uploadTarEntries(
 			"size":        header.Size,
 			"fileName":    entryPath,
 			"archiveFile": strings.TrimSpace(archiveName),
+			"sessionId":   sessionID,
 		})
 	}
 }
@@ -1039,6 +1090,7 @@ func (h *Handler) recordArchiveFailure(
 	targetKey string,
 	reason string,
 	err error,
+	sessionID string,
 	results *[]uploadObjectItemResult,
 	summary *uploadObjectSummary,
 ) uploadArchiveSummary {
@@ -1059,6 +1111,9 @@ func (h *Handler) recordArchiveFailure(
 	}
 	if strings.TrimSpace(entryName) != "" {
 		metadata["archiveEntry"] = strings.TrimSpace(entryName)
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		metadata["sessionId"] = strings.TrimSpace(sessionID)
 	}
 	if err != nil {
 		metadata["error"] = err.Error()
@@ -1146,7 +1201,7 @@ func (h *Handler) uploadTooLargeResult(fileName, targetKey string, size int64) u
 	}
 }
 
-func (h *Handler) recordUploadTooLarge(ctx *gin.Context, projectID uint64, fileName, targetKey string, size int64, archiveName, entryName string) {
+func (h *Handler) recordUploadTooLarge(ctx *gin.Context, projectID uint64, fileName, targetKey string, size int64, archiveName, entryName, sessionID string) {
 	metadata := gin.H{
 		"error":     "file size exceeds upload limit",
 		"errorCode": "upload_file_too_large",
@@ -1161,6 +1216,9 @@ func (h *Handler) recordUploadTooLarge(ctx *gin.Context, projectID uint64, fileN
 	}
 	if strings.TrimSpace(entryName) != "" {
 		metadata["archiveEntry"] = strings.TrimSpace(entryName)
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		metadata["sessionId"] = strings.TrimSpace(sessionID)
 	}
 
 	h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, metadata)

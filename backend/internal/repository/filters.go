@@ -17,6 +17,7 @@ type AuditLogFilter struct {
 	Action           string
 	TargetType       string
 	TargetIdentifier string
+	SessionID        string
 	Result           string
 	CreatedAfter     *time.Time
 	CreatedBefore    *time.Time
