@@ -178,6 +178,8 @@ RBAC 规则：
 - 上传、下载、删除、重命名
 - 自动识别云厂商
 - 压缩包上传会话跟踪与汇总
+- 上传阶段 A/阶段 B 的进度采集与展示支撑
+- 压缩包条目并发上传编排与失败汇总
 - 批量删除编排与逐文件结果汇总
 
 主要接口：
@@ -205,6 +207,35 @@ type ObjectStorageProvider interface {
     RenameObject(ctx context.Context, req RenameObjectRequest) error
 }
 ```
+
+上传性能与进度策略：
+
+- 上传并发策略
+  - 后端在压缩包条目上传链路使用 worker pool 并发执行对象上传。
+  - 并发度使用后端配置项 `upload.archive_parallelism` 控制，默认值固定为 `4`，支持在 `2~8` 范围内调整。
+  - 会话统计在并发执行下保持一致，包含 `totalEntries`、`successEntries`、`failedEntries`、`skipped`。
+- 两段进度策略
+  - 阶段 A（浏览器到后端）：前端通过 `onUploadProgress` 展示请求体传输进度。
+  - 阶段 B（后端处理）：前端基于上传响应中的 `sessionId` 轮询会话汇总审计，展示处理进度与失败摘要。
+  - 阶段 B 的数据来源为 `object.upload_archive` 汇总审计与 `object.upload` 明细审计关联视图。
+- `key` 与 `keyPrefix` 语义约束
+  - 单文件上传仅使用 `key` 指定目标对象路径。
+  - 多文件与压缩包上传使用 `keyPrefix` 作为统一前缀，并保留各文件相对路径。
+  - 前端表单按上传模式展示对应说明，避免单文件与多文件语义混淆。
+
+上传并发配置示例：
+
+```yaml
+upload:
+  max_file_size_mb: 20
+  archive_parallelism: 4
+```
+
+配置约束：
+
+- `archive_parallelism` 未配置时使用默认值 `4`。
+- `archive_parallelism` 小于 `2` 时按 `2` 处理，大于 `8` 时按 `8` 处理。
+- 配置解析与默认值逻辑在 `backend/internal/config/config.go` 统一处理，并在 `backend/config.example.yaml` 提供示例。
 
 #### 5. CDN Component
 
@@ -539,6 +570,7 @@ erDiagram
 - 层级目录列表分页与目录导航逻辑
 - 批量删除结果聚合逻辑
 - 压缩包上传会话聚合与耗时计算逻辑
+- 压缩包并发上传的统计一致性与错误聚合逻辑
 - CDN 刷新与资源同步编排逻辑
 
 测试层次：
@@ -560,6 +592,8 @@ erDiagram
 - 上传、删除、重命名、刷新等关键交互流程
 - 文件树层级导航、每页条数切换与批量删除交互流程
 - 压缩包上传会话进展、耗时与汇总信息展示
+- 上传阶段 A/阶段 B 进度切换与轮询终止逻辑
+- 单文件 `key` 与多文件 `keyPrefix` 参数提交与提示文案一致性
 - 三套主题切换是否正确应用
 
 ### Integration Boundaries
@@ -594,3 +628,4 @@ erDiagram
 - Requirement 10: 由 User and RBAC Component 的管理员重置密码接口、审计写入与前端用户管理页面交互覆盖
 - Requirement 11: 由 Storage Component 的压缩包上传会话跟踪、审计汇总聚合与前端上传结果视图覆盖
 - Requirement 12: 由 Storage Component 的层级目录列表、分页控制、批量删除与单文件重命名约束覆盖
+- Requirement 13: 由 Storage Component 的并发上传编排、两段进度策略与上传参数语义约束覆盖
