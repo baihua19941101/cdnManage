@@ -115,6 +115,9 @@ type UploadSessionSummary = {
 }
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
+const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
+const MIN_OBJECT_FETCH_LIMIT = 200
+const OBJECT_FETCH_LIMIT_MULTIPLIER = 10
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -573,6 +576,8 @@ export function StoragePage() {
   const canWrite = isPlatformAdminRole(platformRole)
 
   const [objects, setObjects] = useState<ObjectItem[]>([])
+  const [objectPageSize, setObjectPageSize] = useState<number>(OBJECT_PAGE_SIZE_OPTIONS[0])
+  const [objectCurrentPage, setObjectCurrentPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
@@ -595,6 +600,8 @@ export function StoragePage() {
   const [sessionDetailVisible, setSessionDetailVisible] = useState(false)
   const [sessionDetailLoading, setSessionDetailLoading] = useState(false)
   const [sessionDetailLogs, setSessionDetailLogs] = useState<StorageAuditLog[]>([])
+  const [sessionDetailCurrentPage, setSessionDetailCurrentPage] = useState(1)
+  const [sessionDetailPageSize, setSessionDetailPageSize] = useState(12)
   const [activeSession, setActiveSession] = useState<UploadSessionSummary | null>(null)
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
@@ -636,7 +643,10 @@ export function StoragePage() {
     }
   }
 
-  const queryObjects = async () => {
+  const objectFetchLimit = (pageSize: number): number =>
+    Math.max(MIN_OBJECT_FETCH_LIMIT, pageSize * OBJECT_FETCH_LIMIT_MULTIPLIER)
+
+  const queryObjects = async (overridePageSize?: number) => {
     const values = await queryForm.validateFields()
     const projectID = Number(values.projectId)
     if (!Number.isFinite(projectID) || projectID <= 0) {
@@ -653,10 +663,12 @@ export function StoragePage() {
           params: {
             bucketName: values.bucketName.trim(),
             prefix: values.prefix?.trim() || undefined,
+            maxKeys: objectFetchLimit(overridePageSize ?? objectPageSize),
           },
         },
       )
       setObjects(response.data.data?.objects ?? [])
+      setObjectCurrentPage(1)
     } catch (error) {
       setQueryError(resolveAPIErrorMessage(error, '对象列表加载失败。'))
       setObjects([])
@@ -1028,6 +1040,7 @@ export function StoragePage() {
     }
 
     setActiveSession(sessionSummary)
+    setSessionDetailCurrentPage(1)
     setSessionDetailVisible(true)
     setSessionDetailLoading(true)
     try {
@@ -1062,6 +1075,11 @@ export function StoragePage() {
       setSessionDetailLoading(false)
     }
   }
+
+  const pagedSessionDetailLogs = sessionDetailLogs.slice(
+    (sessionDetailCurrentPage - 1) * sessionDetailPageSize,
+    sessionDetailCurrentPage * sessionDetailPageSize,
+  )
 
   const columns: ColumnsType<ObjectItem> = [
     {
@@ -1414,7 +1432,21 @@ export function StoragePage() {
             columns={columns}
             dataSource={objects}
             loading={loading}
-            pagination={{ pageSize: 10 }}
+            pagination={{
+              current: objectCurrentPage,
+              pageSize: objectPageSize,
+              showSizeChanger: true,
+              pageSizeOptions: OBJECT_PAGE_SIZE_OPTIONS.map(String),
+              onChange: (page, size) => {
+                if (size && size !== objectPageSize) {
+                  setObjectPageSize(size)
+                  setObjectCurrentPage(1)
+                  void queryObjects(size)
+                  return
+                }
+                setObjectCurrentPage(page)
+              },
+            }}
           />
         </Card>
       </Space>
@@ -1509,8 +1541,21 @@ export function StoragePage() {
           <Table<StorageAuditLog>
             rowKey="id"
             loading={sessionDetailLoading}
-            pagination={{ pageSize: 12 }}
-            dataSource={sessionDetailLogs}
+            pagination={{
+              current: sessionDetailCurrentPage,
+              pageSize: sessionDetailPageSize,
+              total: sessionDetailLogs.length,
+              showSizeChanger: true,
+              pageSizeOptions: ['12', '24', '50', '100'],
+              onChange: (page, size) => {
+                setSessionDetailCurrentPage(page)
+                if (size && size !== sessionDetailPageSize) {
+                  setSessionDetailPageSize(size)
+                  setSessionDetailCurrentPage(1)
+                }
+              },
+            }}
+            dataSource={pagedSessionDetailLogs}
             columns={[
               { title: '时间', dataIndex: 'createdAt', width: 210 },
               { title: '动作', dataIndex: 'action', width: 140 },
