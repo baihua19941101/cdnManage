@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +43,7 @@ type Handler struct {
 	recorder           *auditservice.Recorder
 	maxUploadSizeMB    int64
 	maxUploadSizeBytes int64
+	archiveParallelism int
 }
 
 type validateConnectionRequest struct {
@@ -187,10 +190,11 @@ type renameObjectResponse struct {
 	Summary renameObjectSummary `json:"summary"`
 }
 
-func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64) *Handler {
+func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64, archiveParallelism int) *Handler {
 	if maxUploadSizeMB <= 0 {
 		maxUploadSizeMB = config.DefaultMaxUploadFileSizeMB
 	}
+	archiveParallelism = clampArchiveParallelism(archiveParallelism)
 
 	return &Handler{
 		projectService:     projectService,
@@ -198,6 +202,7 @@ func NewHandler(projectService *serviceprojects.Service, audits repository.Audit
 		recorder:           auditservice.NewRecorder(audits),
 		maxUploadSizeMB:    maxUploadSizeMB,
 		maxUploadSizeBytes: (config.UploadConfig{MaxFileSizeMB: maxUploadSizeMB}).MaxFileSizeBytes(),
+		archiveParallelism: archiveParallelism,
 	}
 }
 
@@ -1063,6 +1068,21 @@ func newArchiveUploadSessionID(startedAt time.Time) string {
 	return fmt.Sprintf("archive-%d-%s", startedAt.UnixMilli(), hex.EncodeToString(suffix))
 }
 
+type archiveUploadTask struct {
+	archiveName string
+	rawName     string
+	entryPath   string
+	targetKey   string
+	contentType string
+	size        int64
+	content     []byte
+}
+
+type archiveUploadTaskResult struct {
+	task archiveUploadTask
+	err  error
+}
+
 func (h *Handler) uploadArchiveEntries(
 	ctx *gin.Context,
 	projectID uint64,
@@ -1110,6 +1130,7 @@ func (h *Handler) uploadZipEntries(
 	}
 
 	stats := uploadArchiveSummary{}
+	tasks := make([]archiveUploadTask, 0, len(reader.File))
 	for _, entry := range reader.File {
 		rawName := strings.TrimSpace(entry.Name)
 		if entry.FileInfo().IsDir() {
@@ -1130,51 +1151,43 @@ func (h *Handler) uploadZipEntries(
 			continue
 		}
 
-		entryReader, openErr := entry.Open()
-		if openErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry could not be opened", openErr, sessionID, results, summary)
-			stats.Failed += failure.Failed
-			continue
-		}
-
 		targetKey := joinObjectKey(baseKey, entryPath)
 		entrySize := int64(entry.UncompressedSize64)
 		if h.isUploadSizeExceeded(entrySize) {
-			_ = entryReader.Close()
 			appendUploadResult(results, summary, h.uploadTooLargeResult(archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize))
 			h.recordUploadTooLarge(ctx, projectID, archiveResultFileName(fileHeader.Filename, entryPath), targetKey, entrySize, fileHeader.Filename, rawName, sessionID)
 			stats.Failed++
 			continue
 		}
 
-		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
-			BucketName:  bucketName,
-			Key:         targetKey,
-			ContentType: archiveEntryContentType(entryPath),
-			Content:     entryReader,
-			Size:        entrySize,
-		})
+		entryReader, openErr := entry.Open()
+		if openErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, "", "archive entry could not be opened", openErr, sessionID, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+		payload, readErr := io.ReadAll(entryReader)
 		_ = entryReader.Close()
-		if uploadErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, targetKey, uploadErr.Error(), nil, sessionID, results, summary)
+		if readErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, fileHeader.Filename, rawName, targetKey, "archive entry could not be read", readErr, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
 
-		appendUploadResult(results, summary, uploadObjectItemResult{
-			FileName: archiveResultFileName(fileHeader.Filename, entryPath),
-			Key:      targetKey,
-			Result:   "success",
-		})
-		stats.Uploaded++
-		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, archiveResultFileName(fileHeader.Filename, entryPath)), model.AuditResultSuccess, gin.H{
-			"size":        int64(entry.UncompressedSize64),
-			"fileName":    entryPath,
-			"archiveFile": strings.TrimSpace(fileHeader.Filename),
-			"sessionId":   sessionID,
+		tasks = append(tasks, archiveUploadTask{
+			archiveName: strings.TrimSpace(fileHeader.Filename),
+			rawName:     rawName,
+			entryPath:   entryPath,
+			targetKey:   targetKey,
+			contentType: archiveEntryContentType(entryPath),
+			size:        entrySize,
+			content:     payload,
 		})
 	}
 
+	parallelStats := h.uploadArchiveTasksConcurrently(ctx, ctx.Request.Context(), projectID, bucketName, tasks, sessionID, results, summary)
+	stats.Uploaded += parallelStats.Uploaded
+	stats.Failed += parallelStats.Failed
 	return stats
 }
 
@@ -1190,16 +1203,16 @@ func (h *Handler) uploadTarEntries(
 	summary *uploadObjectSummary,
 ) uploadArchiveSummary {
 	stats := uploadArchiveSummary{}
-
+	tasks := make([]archiveUploadTask, 0, 16)
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
-			return stats
+			break
 		}
 		if err != nil {
 			failure := h.recordArchiveFailure(ctx, projectID, archiveName, "", "", "archive could not be decompressed", err, sessionID, results, summary)
 			stats.Failed += failure.Failed
-			return stats
+			break
 		}
 
 		rawName := strings.TrimSpace(header.Name)
@@ -1229,32 +1242,110 @@ func (h *Handler) uploadTarEntries(
 			continue
 		}
 
-		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
-			BucketName:  bucketName,
-			Key:         targetKey,
-			ContentType: archiveEntryContentType(entryPath),
-			Content:     reader,
-			Size:        header.Size,
-		})
-		if uploadErr != nil {
-			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, targetKey, uploadErr.Error(), nil, sessionID, results, summary)
+		payload, readErr := io.ReadAll(io.LimitReader(reader, header.Size))
+		if readErr != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, targetKey, "archive entry could not be read", readErr, sessionID, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+		if int64(len(payload)) != header.Size {
+			failure := h.recordArchiveFailure(ctx, projectID, archiveName, rawName, targetKey, "archive entry size mismatch", nil, sessionID, results, summary)
 			stats.Failed += failure.Failed
 			continue
 		}
 
+		tasks = append(tasks, archiveUploadTask{
+			archiveName: strings.TrimSpace(archiveName),
+			rawName:     rawName,
+			entryPath:   entryPath,
+			targetKey:   targetKey,
+			contentType: archiveEntryContentType(entryPath),
+			size:        header.Size,
+			content:     payload,
+		})
+	}
+
+	parallelStats := h.uploadArchiveTasksConcurrently(ctx, ctx.Request.Context(), projectID, bucketName, tasks, sessionID, results, summary)
+	stats.Uploaded += parallelStats.Uploaded
+	stats.Failed += parallelStats.Failed
+	return stats
+}
+
+func (h *Handler) uploadArchiveTasksConcurrently(
+	ctx *gin.Context,
+	requestCtx context.Context,
+	projectID uint64,
+	bucketName string,
+	tasks []archiveUploadTask,
+	sessionID string,
+	results *[]uploadObjectItemResult,
+	summary *uploadObjectSummary,
+) uploadArchiveSummary {
+	stats := uploadArchiveSummary{}
+	if len(tasks) == 0 {
+		return stats
+	}
+
+	parallelism := h.archiveParallelism
+	if parallelism <= 0 {
+		parallelism = config.DefaultArchiveParallelism
+	}
+	if parallelism > len(tasks) {
+		parallelism = len(tasks)
+	}
+
+	taskCh := make(chan archiveUploadTask)
+	resultCh := make(chan archiveUploadTaskResult, len(tasks))
+	var wg sync.WaitGroup
+
+	worker := func() {
+		defer wg.Done()
+		for task := range taskCh {
+			uploadErr := h.projectService.UploadBucketObject(requestCtx, projectID, serviceprojects.UploadBucketObjectInput{
+				BucketName:  bucketName,
+				Key:         task.targetKey,
+				ContentType: task.contentType,
+				Content:     bytes.NewReader(task.content),
+				Size:        task.size,
+			})
+			resultCh <- archiveUploadTaskResult{task: task, err: uploadErr}
+		}
+	}
+
+	wg.Add(parallelism)
+	for i := 0; i < parallelism; i++ {
+		go worker()
+	}
+	for _, task := range tasks {
+		taskCh <- task
+	}
+	close(taskCh)
+	wg.Wait()
+	close(resultCh)
+
+	for item := range resultCh {
+		if item.err != nil {
+			failure := h.recordArchiveFailure(ctx, projectID, item.task.archiveName, item.task.rawName, item.task.targetKey, item.err.Error(), nil, sessionID, results, summary)
+			stats.Failed += failure.Failed
+			continue
+		}
+
+		fileName := archiveResultFileName(item.task.archiveName, item.task.entryPath)
 		appendUploadResult(results, summary, uploadObjectItemResult{
-			FileName: archiveResultFileName(archiveName, entryPath),
-			Key:      targetKey,
+			FileName: fileName,
+			Key:      item.task.targetKey,
 			Result:   "success",
 		})
 		stats.Uploaded++
-		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, archiveResultFileName(archiveName, entryPath)), model.AuditResultSuccess, gin.H{
-			"size":        header.Size,
-			"fileName":    entryPath,
-			"archiveFile": strings.TrimSpace(archiveName),
+		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(item.task.targetKey, fileName), model.AuditResultSuccess, gin.H{
+			"size":        item.task.size,
+			"fileName":    item.task.entryPath,
+			"archiveFile": item.task.archiveName,
 			"sessionId":   sessionID,
 		})
 	}
+
+	return stats
 }
 
 func (h *Handler) recordArchiveFailure(
@@ -1361,6 +1452,19 @@ func archiveResultFileName(archiveName, entryName string) string {
 
 func (h *Handler) isUploadSizeExceeded(size int64) bool {
 	return h != nil && size > 0 && h.maxUploadSizeBytes > 0 && size > h.maxUploadSizeBytes
+}
+
+func clampArchiveParallelism(value int) int {
+	if value == 0 {
+		return config.DefaultArchiveParallelism
+	}
+	if value < config.MinArchiveParallelism {
+		return config.MinArchiveParallelism
+	}
+	if value > config.MaxArchiveParallelism {
+		return config.MaxArchiveParallelism
+	}
+	return value
 }
 
 func (h *Handler) uploadTooLargeResult(fileName, targetKey string, size int64) uploadObjectItemResult {

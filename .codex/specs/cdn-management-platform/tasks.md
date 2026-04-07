@@ -278,7 +278,7 @@
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 14.2_
 
 - [ ] 18. 提升上传性能并实现阶段化进度提示（新需求）
-  - [ ] 18.1 实现压缩包条目并发上传能力与可配置并发度
+  - [x] 18.1 实现压缩包条目并发上传能力与可配置并发度
     - 在后端压缩包上传链路引入 worker pool 并发执行对象上传
     - 在 `backend/internal/config/config.go` 的 `UploadConfig` 中新增 `archive_parallelism` 配置并设置默认值 `4`
     - 在 `backend/config.example.yaml` 增加 `upload.archive_parallelism` 示例项
