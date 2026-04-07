@@ -15,6 +15,7 @@ import (
 	infraDB "github.com/baihua19941101/cdnManage/internal/infra/db"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/repository"
+	serviceauth "github.com/baihua19941101/cdnManage/internal/service/auth"
 )
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -118,4 +119,70 @@ func TestServiceReplaceProjectBindingsRejectsDuplicateProjectIDs(t *testing.T) {
 	require.ErrorAs(t, err, &appErr)
 	require.Equal(t, 400, appErr.StatusCode)
 	require.Equal(t, "duplicate_project_binding", appErr.Code)
+}
+
+func TestServiceResetPasswordSucceeds(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	oldPasswordHash, err := serviceauth.HashPassword("OldPassword123!")
+	require.NoError(t, err)
+
+	user := &model.User{
+		Username:     "reset-" + suffix,
+		Email:        "reset-" + suffix + "@example.com",
+		PasswordHash: oldPasswordHash,
+		Status:       model.UserStatusActive,
+		PlatformRole: model.PlatformRoleStandard,
+	}
+	require.NoError(t, store.Users().Create(ctx, user))
+
+	require.NoError(t, service.ResetPassword(ctx, user.ID, "NewPassword123!"))
+
+	updatedUser, err := store.Users().GetByID(ctx, user.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, oldPasswordHash, updatedUser.PasswordHash)
+	require.NoError(t, serviceauth.ComparePassword(updatedUser.PasswordHash, "NewPassword123!"))
+}
+
+func TestServiceResetPasswordReturnsUserNotFound(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+
+	err := service.ResetPassword(context.Background(), 999999, "NewPassword123!")
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 404, appErr.StatusCode)
+	require.Equal(t, "user_not_found", appErr.Code)
+}
+
+func TestServiceResetPasswordReturnsPasswordPolicyViolation(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	user := &model.User{
+		Username:     "policy-" + suffix,
+		Email:        "policy-" + suffix + "@example.com",
+		PasswordHash: "hash",
+		Status:       model.UserStatusActive,
+		PlatformRole: model.PlatformRoleStandard,
+	}
+	require.NoError(t, store.Users().Create(ctx, user))
+
+	err := service.ResetPassword(ctx, user.ID, "short")
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "password_policy_violation", appErr.Code)
 }
