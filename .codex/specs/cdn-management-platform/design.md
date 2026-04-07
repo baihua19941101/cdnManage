@@ -175,12 +175,12 @@ RBAC 规则：
 
 - 存储桶连接校验
 - 分层目录文件列表查询与分页
-- 上传、下载、删除、重命名
+- 上传、下载、单文件删除、目录递归删除、批量删除、重命名
 - 自动识别云厂商
 - 压缩包上传会话跟踪与汇总
 - 上传阶段 A/阶段 B 的进度采集与展示支撑
 - 压缩包条目并发上传编排与失败汇总
-- 批量删除编排与逐文件结果汇总
+- 目录递归删除编排与批量删除逐项结果汇总
 
 主要接口：
 
@@ -207,6 +207,23 @@ type ObjectStorageProvider interface {
     RenameObject(ctx context.Context, req RenameObjectRequest) error
 }
 ```
+
+目录删除策略：
+
+- 目录在对象存储中按 `prefix/` 逻辑目录处理，不要求 Provider 暴露独立“删除目录”原语。
+- 单目录删除复用 `DELETE /api/v1/projects/:id/storage/objects`，当 `key` 以 `/` 结尾时服务层切换为递归删除模式。
+- 递归删除流程按目录前缀分页列出对象，再逐对象调用 Provider 删除，直到该前缀下对象被清空。
+- 批量删除接口允许同时提交文件 key 与目录 key；目录 key 在同一编排中按递归删除模式执行。
+- 批量删除结果项需区分 `targetType=file|directory`，目录项额外返回 `deletedObjects`、`failedObjects` 与失败摘要。
+- 若目录前缀下未找到任何对象，系统返回成功结果并将 `deletedObjects` 记为 `0`，避免把空目录清理视为异常。
+
+前端交互约束：
+
+- 目录行保留“删除”入口，但确认文案需明确说明会删除目录下全部对象。
+- 单文件行保留下载、重命名、删除入口。
+- 批量选择允许同时选择文件与目录，确认弹窗需提示“目录将递归删除其下全部对象”。
+- 删除完成后前端刷新当前目录列表并清空选中项；若当前目录本身被删除，前端返回上一级目录后重新查询。
+- 目录重命名入口继续禁用或在提交前拒绝，避免与目录递归删除能力产生交互歧义。
 
 上传性能与进度策略：
 
@@ -445,6 +462,7 @@ erDiagram
   - 枚举：`success`、`failure`、`denied`
 - `metadata`
   - 保存请求摘要、错误码、对象路径、刷新路径、IP、User-Agent 等补充信息
+  - 对目录递归删除与批量删除补充 `recursive`、`targetType`、`deletedObjects`、`failedObjects`、`batch`
 
 #### `upload_session`（基于审计汇总的逻辑模型）
 
@@ -473,6 +491,18 @@ erDiagram
   - `size`
   - `last_modified`
   - `content_type`
+
+#### `delete_result`（接口响应逻辑模型）
+
+- 用于表达单文件删除、目录递归删除和批量删除中的逐项结果。
+- 建议字段：
+  - `key`
+  - `target_type`（`file` 或 `directory`）
+  - `result`（`success` 或 `failure`）
+  - `deleted_objects`
+  - `failed_objects`
+  - `error_code`
+  - `reason`
 
 ### Security and Secret Management
 
@@ -552,7 +582,9 @@ erDiagram
 - 越权与认证失败要分别记录，便于审计分析。
 - 文件上传与同步失败时，响应中返回可追踪请求编号。
 - 压缩包上传失败时，响应中返回上传会话标识与失败条目摘要。
-- 批量删除返回逐文件结果时，必须区分成功、失败及失败原因。
+- 目录递归删除出现部分失败时，响应中必须返回已删除对象数、失败对象数与失败摘要。
+- 批量删除返回逐项结果时，必须区分文件与目录、成功与失败及失败原因。
+- 目录重命名请求统一返回明确错误码，保持“仅支持单文件重命名”的产品行为。
 
 ## Testing Strategy
 
@@ -568,7 +600,7 @@ erDiagram
 - 审计日志写入触发条件
 - 存储桶文件操作服务逻辑
 - 层级目录列表分页与目录导航逻辑
-- 批量删除结果聚合逻辑
+- 单目录递归删除、批量混合删除与结果聚合逻辑
 - 压缩包上传会话聚合与耗时计算逻辑
 - 压缩包并发上传的统计一致性与错误聚合逻辑
 - CDN 刷新与资源同步编排逻辑
@@ -590,11 +622,12 @@ erDiagram
 - 基于权限的菜单与按钮可见性
 - 项目切换后的数据隔离
 - 上传、删除、重命名、刷新等关键交互流程
-- 文件树层级导航、每页条数切换与批量删除交互流程
+- 文件树层级导航、每页条数切换、目录删除与批量混合删除交互流程
 - 压缩包上传会话进展、耗时与汇总信息展示
 - 上传阶段 A/阶段 B 进度切换与轮询终止逻辑
 - 单文件 `key` 与多文件 `keyPrefix` 参数提交与提示文案一致性
 - 三套主题切换是否正确应用
+- 当前目录被删除后返回上一级目录的导航行为
 
 ### Integration Boundaries
 
@@ -627,5 +660,6 @@ erDiagram
 - Requirement 9: 由分层架构、Provider 抽象、Redis 策略与数据模型拆分覆盖
 - Requirement 10: 由 User and RBAC Component 的管理员重置密码接口、审计写入与前端用户管理页面交互覆盖
 - Requirement 11: 由 Storage Component 的压缩包上传会话跟踪、审计汇总聚合与前端上传结果视图覆盖
-- Requirement 12: 由 Storage Component 的层级目录列表、分页控制、批量删除与单文件重命名约束覆盖
+- Requirement 12: 由 Storage Component 的层级目录列表、分页控制、目录递归删除与批量混合删除覆盖
 - Requirement 13: 由 Storage Component 的并发上传编排、两段进度策略与上传参数语义约束覆盖
+- Requirement 14: 由 Storage Component 的单文件重命名流程与目录重命名拒绝规则覆盖
