@@ -63,6 +63,7 @@ func (p *TencentCOSProvider) ListObjects(ctx context.Context, req ListObjectsReq
 	opt := &cos.BucketGetOptions{
 		Prefix: strings.TrimSpace(req.Prefix),
 		Marker: strings.TrimSpace(req.Marker),
+		Delimiter: "/",
 	}
 	if req.MaxKeys > 0 {
 		opt.MaxKeys = req.MaxKeys
