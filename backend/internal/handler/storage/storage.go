@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -100,6 +102,13 @@ type uploadObjectResponse struct {
 	Summary        uploadObjectSummary      `json:"summary"`
 	Results        []uploadObjectItemResult `json:"results"`
 	ArchiveSummary *uploadArchiveSummary    `json:"archiveSummary,omitempty"`
+	SessionID      *string                  `json:"sessionId,omitempty"`
+	StartedAt      *string                  `json:"startedAt,omitempty"`
+	FinishedAt     *string                  `json:"finishedAt,omitempty"`
+	DurationMs     *int64                   `json:"durationMs,omitempty"`
+	TotalEntries   *int                     `json:"totalEntries,omitempty"`
+	SuccessEntries *int                     `json:"successEntries,omitempty"`
+	FailedEntries  *int                     `json:"failedEntries,omitempty"`
 }
 
 type auditLogResponse struct {
@@ -280,6 +289,8 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 	results := make([]uploadObjectItemResult, 0, len(fileHeaders))
 	summary := uploadObjectSummary{}
 	var archiveSummary *uploadArchiveSummary
+	var archiveSessionID string
+	var archiveStartedAt time.Time
 
 	for _, fileHeader := range fileHeaders {
 		fileName := ""
@@ -339,6 +350,10 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		if archiveFormat != "" {
 			archiveSummary = ensureArchiveSummary(archiveSummary)
 			archiveSummary.ArchivesProcessed++
+			if archiveSessionID == "" {
+				archiveStartedAt = time.Now().UTC()
+				archiveSessionID = newArchiveUploadSessionID(archiveStartedAt)
+			}
 
 			stats := h.uploadArchiveEntries(ctx, projectID, bucketName, fileHeader, file, resolveArchiveUploadBaseKey(key, keyPrefix, len(fileHeaders)), archiveFormat, &results, &summary)
 			archiveSummary.Extracted += stats.Extracted
@@ -412,7 +427,24 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 		Results: results,
 	}
 	if archiveSummary != nil {
+		finishedAt := time.Now().UTC()
+		durationMs := finishedAt.Sub(archiveStartedAt).Milliseconds()
+		if durationMs < 0 {
+			durationMs = 0
+		}
+		startedAtText := archiveStartedAt.Format(time.RFC3339)
+		finishedAtText := finishedAt.Format(time.RFC3339)
+		totalEntries := archiveSummary.Uploaded + archiveSummary.Failed
+		successEntries := archiveSummary.Uploaded
+		failedEntries := archiveSummary.Failed
 		response.ArchiveSummary = archiveSummary
+		response.SessionID = &archiveSessionID
+		response.StartedAt = &startedAtText
+		response.FinishedAt = &finishedAtText
+		response.DurationMs = &durationMs
+		response.TotalEntries = &totalEntries
+		response.SuccessEntries = &successEntries
+		response.FailedEntries = &failedEntries
 	}
 
 	httpresp.Success(ctx, response)
@@ -799,6 +831,15 @@ func ensureArchiveSummary(summary *uploadArchiveSummary) *uploadArchiveSummary {
 		return summary
 	}
 	return &uploadArchiveSummary{}
+}
+
+func newArchiveUploadSessionID(startedAt time.Time) string {
+	startedAt = startedAt.UTC()
+	suffix := make([]byte, 4)
+	if _, err := cryptorand.Read(suffix); err != nil {
+		return fmt.Sprintf("archive-%d-%d", startedAt.UnixMilli(), startedAt.UnixNano())
+	}
+	return fmt.Sprintf("archive-%d-%s", startedAt.UnixMilli(), hex.EncodeToString(suffix))
 }
 
 func (h *Handler) uploadArchiveEntries(
