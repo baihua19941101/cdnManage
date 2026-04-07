@@ -50,6 +50,7 @@ type StorageAuditLog = {
   result: string
   requestId: string
   createdAt: string
+  metadata?: Record<string, unknown>
 }
 
 type ApiResponse<T> = {
@@ -96,6 +97,27 @@ type ArchiveSummary = {
 type UploadFailureReasonItem = {
   fileName: string
   reason: string
+}
+
+type UploadSessionSummaryItem = {
+  sessionId: string
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  totalEntries: number
+  successEntries: number
+  failedEntries: number
+  progressText: string
+  failureReasonSummary: string
+}
+
+type StorageAuditQueryParams = {
+  path?: string
+  sessionId?: string
+  action?: string
+  result?: string
+  limit?: number
+  offset?: number
 }
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
@@ -296,6 +318,131 @@ const parseFailureReasonSummaryFromError = (error: unknown, limit = 3): string =
   return parseFailureReasonSummary(payload, limit)
 }
 
+const formatDateTimeText = (raw: string): string => {
+  const value = raw.trim()
+  if (!value) {
+    return '-'
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+const formatDurationText = (durationMs: number): string => {
+  const normalized = Math.max(0, Math.floor(durationMs))
+  if (normalized < 1000) {
+    return `${normalized} ms`
+  }
+  const totalSeconds = Math.floor(normalized / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes === 0) {
+    return `${totalSeconds} s`
+  }
+  return `${minutes} min ${seconds} s`
+}
+
+const truncateText = (value: string, maxLength = 120): string => {
+  const trimmed = value.trim()
+  if (trimmed.length <= maxLength) {
+    return trimmed
+  }
+  return `${trimmed.slice(0, Math.max(0, maxLength - 3))}...`
+}
+
+const getAuditMetadata = (log: StorageAuditLog): Record<string, unknown> =>
+  isRecord(log.metadata) ? log.metadata : {}
+
+const extractSessionIDFromAuditLog = (log: StorageAuditLog): string => {
+  const metadata = getAuditMetadata(log)
+  const fromMetadata = normalizeString(metadata.sessionId)
+  if (fromMetadata) {
+    return fromMetadata
+  }
+  return normalizeString(log.targetIdentifier)
+}
+
+const extractFailureReasonFromAuditLog = (log: StorageAuditLog): string => {
+  const metadata = getAuditMetadata(log)
+  const reasonCandidates: unknown[] = [
+    metadata.error,
+    metadata.reason,
+    metadata.message,
+    metadata.detail,
+  ]
+  for (const candidate of reasonCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      const code = normalizeString(metadata.errorCode)
+      if (code) {
+        return `${candidate.trim()} (${code})`
+      }
+      return candidate.trim()
+    }
+  }
+  const targetIdentifier = normalizeString(log.targetIdentifier)
+  return targetIdentifier || 'unknown error'
+}
+
+const summarizeAuditFailureReasons = (logs: StorageAuditLog[], limit = 3): string => {
+  const reasonCounter = new Map<string, number>()
+  for (const log of logs) {
+    if (log.result !== 'failure') {
+      continue
+    }
+    const reason = extractFailureReasonFromAuditLog(log)
+    reasonCounter.set(reason, (reasonCounter.get(reason) ?? 0) + 1)
+  }
+
+  if (reasonCounter.size === 0) {
+    return ''
+  }
+
+  return Array.from(reasonCounter.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, Math.max(1, limit))
+    .map(([reason, count], index) => `${index + 1}. ${truncateText(reason)} (${count})`)
+    .join('；')
+}
+
+const parseUploadSessionFromAuditLog = (log: StorageAuditLog): UploadSessionSummaryItem | null => {
+  const metadata = getAuditMetadata(log)
+  const sessionId = extractSessionIDFromAuditLog(log)
+  if (!sessionId) {
+    return null
+  }
+
+  const successEntries = Math.max(0, Math.floor(toNonNegativeNumber(metadata.successEntries) ?? 0))
+  const failedEntries = Math.max(0, Math.floor(toNonNegativeNumber(metadata.failedEntries) ?? 0))
+  const totalEntriesFromMetadata = toNonNegativeNumber(metadata.totalEntries)
+  const totalEntries =
+    totalEntriesFromMetadata === null
+      ? successEntries + failedEntries
+      : Math.max(0, Math.floor(totalEntriesFromMetadata))
+  const processedEntries = Math.max(0, successEntries + failedEntries)
+  const progressPercent =
+    totalEntries > 0 ? Math.min(100, Math.round((processedEntries / totalEntries) * 100)) : 0
+
+  const startedAt = normalizeString(metadata.startedAt) || log.createdAt
+  const finishedAt = normalizeString(metadata.finishedAt) || log.createdAt
+  const durationFromMetadata = toNonNegativeNumber(metadata.durationMs)
+  const durationMs =
+    durationFromMetadata === null ? Math.max(0, new Date(finishedAt).getTime() - new Date(startedAt).getTime()) : Math.floor(durationFromMetadata)
+
+  return {
+    sessionId,
+    startedAt,
+    finishedAt,
+    durationMs: Number.isFinite(durationMs) ? durationMs : 0,
+    totalEntries,
+    successEntries,
+    failedEntries,
+    progressText: totalEntries > 0 ? `${processedEntries}/${totalEntries} (${progressPercent}%)` : '-',
+    failureReasonSummary: '',
+  }
+}
+
 const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
   if (!isRecord(data)) {
     return null
@@ -409,6 +556,18 @@ const fetchUploadPolicyLimitBytes = async (): Promise<number> => {
   return parseUploadPolicyLimitBytes(response.data?.data) ?? DEFAULT_UPLOAD_SIZE_LIMIT_BYTES
 }
 
+const fetchStorageAuditLogs = async (
+  projectID: number,
+  params: StorageAuditQueryParams,
+): Promise<StorageAuditLog[]> => {
+  const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
+    `/projects/${projectID}/storage/audits`,
+    { params },
+  )
+  const logs = response.data?.data?.logs
+  return Array.isArray(logs) ? logs : []
+}
+
 export function StoragePage() {
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
@@ -431,6 +590,9 @@ export function StoragePage() {
   const [auditVisible, setAuditVisible] = useState(false)
   const [auditLogs, setAuditLogs] = useState<StorageAuditLog[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
+  const [auditTitle, setAuditTitle] = useState('对象审计日志')
+  const [uploadSessions, setUploadSessions] = useState<UploadSessionSummaryItem[]>([])
+  const [uploadSessionsLoading, setUploadSessionsLoading] = useState(false)
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [bucketOptions, setBucketOptions] = useState<string[]>([])
@@ -492,9 +654,11 @@ export function StoragePage() {
         },
       )
       setObjects(response.data.data?.objects ?? [])
+      await loadUploadSessions(projectID, { silent: true })
     } catch (error) {
       setQueryError(resolveAPIErrorMessage(error, '对象列表加载失败。'))
       setObjects([])
+      setUploadSessions([])
     } finally {
       setLoading(false)
     }
@@ -539,6 +703,96 @@ export function StoragePage() {
       queryForm.setFieldValue('bucketName', '')
     } finally {
       setBucketOptionsLoading(false)
+    }
+  }
+
+  const loadUploadSessions = async (
+    projectID: number,
+    options: { silent?: boolean } = {},
+  ) => {
+    if (!Number.isFinite(projectID) || projectID <= 0) {
+      setUploadSessions([])
+      return
+    }
+
+    setUploadSessionsLoading(true)
+    try {
+      const logs = await fetchStorageAuditLogs(projectID, {
+        action: 'object.upload_archive',
+        limit: 20,
+        offset: 0,
+      })
+
+      const sessionMap = new Map<string, UploadSessionSummaryItem>()
+      for (const log of logs) {
+        const session = parseUploadSessionFromAuditLog(log)
+        if (!session) {
+          continue
+        }
+        const existing = sessionMap.get(session.sessionId)
+        if (!existing || new Date(session.finishedAt).getTime() > new Date(existing.finishedAt).getTime()) {
+          sessionMap.set(session.sessionId, session)
+        }
+      }
+
+      const sessions = Array.from(sessionMap.values())
+      const sessionsWithFailureSummary = await Promise.all(
+        sessions.map(async (session) => {
+          if (session.failedEntries <= 0) {
+            return session
+          }
+          let failureReasonSummary = ''
+          try {
+            const details = await fetchStorageAuditLogs(projectID, {
+              sessionId: session.sessionId,
+              limit: 200,
+              offset: 0,
+            })
+            const detailFailures = details.filter((item) => item.action === 'object.upload')
+            failureReasonSummary = summarizeAuditFailureReasons(detailFailures)
+          } catch {
+            failureReasonSummary = ''
+          }
+          return {
+            ...session,
+            failureReasonSummary,
+          }
+        }),
+      )
+
+      setUploadSessions(
+        sessionsWithFailureSummary.sort(
+          (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+        ),
+      )
+    } catch (error) {
+      setUploadSessions([])
+      if (!options.silent) {
+        messageApi.error(resolveAPIErrorMessage(error, '上传会话加载失败。'))
+      }
+    } finally {
+      setUploadSessionsLoading(false)
+    }
+  }
+
+  const openAuditByQuery = async (title: string, params: StorageAuditQueryParams) => {
+    const { projectID } = getQuery()
+    if (!projectID) {
+      messageApi.error('请先填写并查询 Project ID。')
+      return
+    }
+
+    setAuditTitle(title)
+    setAuditVisible(true)
+    setAuditLoading(true)
+    try {
+      const logs = await fetchStorageAuditLogs(projectID, params)
+      setAuditLogs(logs)
+    } catch (error) {
+      messageApi.error(resolveAPIErrorMessage(error, '审计日志查询失败。'))
+      setAuditLogs([])
+    } finally {
+      setAuditLoading(false)
     }
   }
 
@@ -743,28 +997,16 @@ export function StoragePage() {
     }
   }
 
-  const openAudit = async (path: string) => {
-    const { projectID } = getQuery()
-    if (!projectID) {
-      messageApi.error('请先填写并查询 Project ID。')
-      return
-    }
-    setAuditVisible(true)
-    setAuditLoading(true)
-    try {
-      const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
-        `/projects/${projectID}/storage/audits`,
-        {
-          params: { path, limit: 20, offset: 0 },
-        },
-      )
-      setAuditLogs(response.data.data?.logs ?? [])
-    } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '审计日志查询失败。'))
-      setAuditLogs([])
-    } finally {
-      setAuditLoading(false)
-    }
+  const openObjectAudit = async (path: string) => {
+    await openAuditByQuery(`对象审计日志：${path}`, { path, limit: 20, offset: 0 })
+  }
+
+  const openSessionAudit = async (sessionId: string) => {
+    await openAuditByQuery(`上传会话明细：${sessionId}`, {
+      sessionId,
+      limit: 200,
+      offset: 0,
+    })
   }
 
   const columns: ColumnsType<ObjectItem> = [
@@ -821,13 +1063,112 @@ export function StoragePage() {
           <Button
             icon={<FileSearchOutlined />}
             size="small"
-            onClick={() => void openAudit(record.key)}
+            onClick={() => void openObjectAudit(record.key)}
           >
             审计
           </Button>
         </Space>
       ),
     },
+  ]
+
+  const uploadSessionColumns: ColumnsType<UploadSessionSummaryItem> = [
+    {
+      title: '会话 ID',
+      dataIndex: 'sessionId',
+      width: 240,
+      render: (value: string) => <Typography.Text copyable>{value}</Typography.Text>,
+    },
+    {
+      title: '整体进展',
+      dataIndex: 'progressText',
+      width: 140,
+      render: (value: string) => <Typography.Text>{value || '-'}</Typography.Text>,
+    },
+    {
+      title: '开始时间',
+      dataIndex: 'startedAt',
+      width: 180,
+      render: (value: string) => formatDateTimeText(value),
+    },
+    {
+      title: '结束时间',
+      dataIndex: 'finishedAt',
+      width: 180,
+      render: (value: string) => formatDateTimeText(value),
+    },
+    {
+      title: '耗时',
+      dataIndex: 'durationMs',
+      width: 120,
+      render: (value: number) => formatDurationText(value),
+    },
+    { title: '成功', dataIndex: 'successEntries', width: 90 },
+    { title: '失败', dataIndex: 'failedEntries', width: 90 },
+    {
+      title: '失败原因摘要',
+      dataIndex: 'failureReasonSummary',
+      render: (value: string, record) =>
+        record.failedEntries > 0 ? (
+          <Typography.Text type={value ? undefined : 'secondary'}>
+            {value || '暂无失败原因详情'}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ),
+    },
+    {
+      title: '操作',
+      width: 110,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button size="small" onClick={() => void openSessionAudit(record.sessionId)}>
+          查看明细
+        </Button>
+      ),
+    },
+  ]
+
+  const auditColumns: ColumnsType<StorageAuditLog> = [
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      width: 200,
+      render: (value: string) => formatDateTimeText(value),
+    },
+    { title: '动作', dataIndex: 'action', width: 160 },
+    {
+      title: '结果',
+      dataIndex: 'result',
+      width: 110,
+      render: (value: string) =>
+        value === 'success' ? (
+          <Tag color="green">success</Tag>
+        ) : value === 'failure' ? (
+          <Tag color="red">failure</Tag>
+        ) : (
+          <Tag>{value}</Tag>
+        ),
+    },
+    { title: '对象', dataIndex: 'targetIdentifier', width: 260 },
+    {
+      title: '会话',
+      width: 220,
+      render: (_, record) => {
+        const sessionId = extractSessionIDFromAuditLog(record)
+        return sessionId ? <Typography.Text copyable>{sessionId}</Typography.Text> : '-'
+      },
+    },
+    {
+      title: '详情',
+      render: (_, record) => {
+        if (record.result !== 'failure') {
+          return <Typography.Text type="secondary">-</Typography.Text>
+        }
+        return <Typography.Text>{truncateText(extractFailureReasonFromAuditLog(record))}</Typography.Text>
+      },
+    },
+    { title: '操作者', dataIndex: 'actorUsername', width: 140 },
   ]
 
   return (
@@ -874,7 +1215,9 @@ export function StoragePage() {
                   }
                 }}
                 onChange={(value) => {
-                  void loadBucketsByProject(Number(value))
+                  const projectID = Number(value)
+                  void loadBucketsByProject(projectID)
+                  void loadUploadSessions(projectID, { silent: true })
                 }}
               />
             </Form.Item>
@@ -994,6 +1337,36 @@ export function StoragePage() {
           </Space>
         </Card>
 
+        <Card
+          title="压缩包上传会话"
+          extra={
+            <Button
+              icon={<ReloadOutlined />}
+              loading={uploadSessionsLoading}
+              onClick={() => {
+                const projectID = Number(queryForm.getFieldValue('projectId'))
+                if (!Number.isFinite(projectID) || projectID <= 0) {
+                  messageApi.error('请先选择 Project ID。')
+                  return
+                }
+                void loadUploadSessions(projectID)
+              }}
+            >
+              刷新会话
+            </Button>
+          }
+        >
+          <Table<UploadSessionSummaryItem>
+            rowKey="sessionId"
+            columns={uploadSessionColumns}
+            dataSource={uploadSessions}
+            loading={uploadSessionsLoading}
+            pagination={{ pageSize: 5 }}
+            scroll={{ x: 1300 }}
+            locale={{ emptyText: '暂无压缩包上传会话记录（请先选择项目并执行上传或查询）' }}
+          />
+        </Card>
+
         <Card title="Object List">
           <Table<ObjectItem>
             rowKey="key"
@@ -1029,7 +1402,7 @@ export function StoragePage() {
       </Modal>
 
       <Drawer
-        title="对象审计日志"
+        title={auditTitle}
         open={auditVisible}
         onClose={() => setAuditVisible(false)}
         width={760}
@@ -1039,25 +1412,8 @@ export function StoragePage() {
           loading={auditLoading}
           pagination={{ pageSize: 8 }}
           dataSource={auditLogs}
-          columns={[
-            { title: '时间', dataIndex: 'createdAt', width: 210 },
-            { title: '动作', dataIndex: 'action', width: 160 },
-            {
-              title: '结果',
-              dataIndex: 'result',
-              width: 120,
-              render: (value: string) =>
-                value === 'success' ? (
-                  <Tag color="green">success</Tag>
-                ) : value === 'failure' ? (
-                  <Tag color="red">failure</Tag>
-                ) : (
-                  <Tag>{value}</Tag>
-                ),
-            },
-            { title: '对象', dataIndex: 'targetIdentifier' },
-            { title: '操作者', dataIndex: 'actorUsername', width: 140 },
-          ]}
+          columns={auditColumns}
+          scroll={{ x: 1300 }}
         />
       </Drawer>
     </>
