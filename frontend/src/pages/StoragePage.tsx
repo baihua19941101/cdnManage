@@ -103,7 +103,10 @@ type UploadFailureReasonItem = {
 
 type BatchDeleteItemResult = {
   key: string
+  targetType?: string
   result: string
+  deletedObjects?: number
+  failedObjects?: number
   errorCode?: string
   reason?: string
 }
@@ -1020,7 +1023,7 @@ export function StoragePage() {
       .map((item) => String(item).trim())
       .filter((item) => item !== '')
     if (keys.length === 0) {
-      messageApi.warning('请先选择要删除的文件。')
+      messageApi.warning('请先选择要删除的文件或目录。')
       return
     }
 
@@ -1039,23 +1042,45 @@ export function StoragePage() {
       const summary = payload?.summary
       const success = toNonNegativeNumber(summary?.success) ?? 0
       const failure = toNonNegativeNumber(summary?.failure) ?? 0
+      const allResults = Array.isArray(payload?.results) ? payload.results : []
+      const selectedDirectories = allResults.filter(
+        (item) => normalizeString(item.targetType) === 'directory',
+      ).length
+      const selectedFiles = keys.length - selectedDirectories
+      const directoryDeletedObjects = allResults.reduce((acc, item) => {
+        if (normalizeString(item.targetType) !== 'directory') {
+          return acc
+        }
+        return acc + (toNonNegativeNumber(item.deletedObjects) ?? 0)
+      }, 0)
+      const directoryFailedObjects = allResults.reduce((acc, item) => {
+        if (normalizeString(item.targetType) !== 'directory') {
+          return acc
+        }
+        return acc + (toNonNegativeNumber(item.failedObjects) ?? 0)
+      }, 0)
 
-      const failedItems = Array.isArray(payload?.results)
-        ? payload!.results!.filter((item) => normalizeString(item.result) !== 'success').slice(0, 3)
-        : []
+      const failedItems = allResults
+        .filter((item) => normalizeString(item.result) !== 'success')
+        .slice(0, 3)
       const failedText = failedItems
         .map((item, index) => {
           const reason = normalizeString(item.reason) || normalizeString(item.errorCode) || 'unknown error'
           return `${index + 1}. ${item.key}: ${reason}`
         })
         .join('；')
+      const scopeText = `（文件 ${selectedFiles}，目录 ${selectedDirectories}）`
+      const directorySummaryText =
+        selectedDirectories > 0
+          ? `。目录递归删除统计：成功删除对象 ${directoryDeletedObjects}，失败 ${directoryFailedObjects}`
+          : ''
 
       if (failure > 0) {
         messageApi.warning(
-          `批量删除完成：成功 ${success}，失败 ${failure}${failedText ? `。失败摘要：${failedText}` : ''}`,
+          `批量删除完成${scopeText}：成功 ${success}，失败 ${failure}${directorySummaryText}${failedText ? `。失败摘要：${failedText}` : ''}`,
         )
       } else {
-        messageApi.success(`批量删除完成：成功 ${success}，失败 0`)
+        messageApi.success(`批量删除完成${scopeText}：成功 ${success}，失败 0${directorySummaryText}`)
       }
 
       setSelectedObjectKeys([])
@@ -1341,8 +1366,8 @@ export function StoragePage() {
   const rowSelection: TableRowSelection<ObjectItem> = {
     selectedRowKeys: selectedObjectKeys,
     onChange: (keys) => setSelectedObjectKeys(keys),
-    getCheckboxProps: (record) => ({
-      disabled: record.isDir || !canWrite,
+    getCheckboxProps: () => ({
+      disabled: !canWrite,
     }),
     preserveSelectedRowKeys: false,
   }
@@ -1648,7 +1673,7 @@ export function StoragePage() {
                 返回上一级
               </Button>
               <Popconfirm
-                title={`确认删除已选 ${selectedObjectKeys.length} 个文件？`}
+                title={`确认删除已选 ${selectedObjectKeys.length} 个条目？目录将递归删除其下全部对象。`}
                 onConfirm={() => void deleteSelectedObjects()}
                 okButtonProps={{ loading: submitting }}
                 disabled={!canWrite || selectedObjectKeys.length === 0}

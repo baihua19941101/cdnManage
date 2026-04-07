@@ -504,13 +504,19 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 	results := make([]DeleteBucketObjectResult, 0, len(keys))
 	for _, key := range keys {
 		if strings.HasSuffix(key, "/") {
-			results = append(results, DeleteBucketObjectResult{
+			result := s.deleteDirectoryRecursively(ctx, storageProvider, provider.DeleteObjectRequest{
+				Bucket:     bucket.BucketName,
+				Region:     bucket.Region,
 				Key:        key,
-				TargetType: "directory",
-				Success:    false,
-				ErrorCode:  "directory_delete_not_supported",
-				Message:    "directory key is not supported in batch delete",
+				Credential: credentialPayload,
 			})
+			if result.Key == "" {
+				result.Key = key
+			}
+			if result.TargetType == "" {
+				result.TargetType = "directory"
+			}
+			results = append(results, result)
 			continue
 		}
 
