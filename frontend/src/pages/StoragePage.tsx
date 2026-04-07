@@ -169,8 +169,6 @@ type UploadSessionSummary = {
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 const UPLOAD_STAGE_A_TIMEOUT_MS = 10 * 60 * 1000
-const UPLOAD_STAGE_B_POLL_INTERVAL_MS = 1500
-const UPLOAD_STAGE_B_MAX_POLL_ATTEMPTS = 20
 const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 const MIN_OBJECT_FETCH_LIMIT = 200
 const OBJECT_FETCH_LIMIT_MULTIPLIER = 10
@@ -615,69 +613,6 @@ const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
   return null
 }
 
-const parseUploadSessionID = (data: unknown): string => {
-  if (!isRecord(data)) {
-    return ''
-  }
-
-  const candidates: unknown[] = [data.sessionId, data.uploadSessionId, data.archiveSessionId]
-  for (const candidate of candidates) {
-    const sessionID = normalizeString(candidate)
-    if (sessionID) {
-      return sessionID
-    }
-  }
-
-  return ''
-}
-
-const parseArchiveSessionSummaryFromUploadResponse = (
-  data: unknown,
-  sessionID: string,
-): UploadSessionSummary | null => {
-  if (!isRecord(data) || !sessionID) {
-    return null
-  }
-
-  const startedAt = normalizeString(data.startedAt)
-  const finishedAt = normalizeString(data.finishedAt)
-  const durationMs = toNonNegativeNumber(data.durationMs) ?? 0
-  const totalEntries = toNonNegativeNumber(data.totalEntries) ?? 0
-  const successEntries = toNonNegativeNumber(data.successEntries) ?? 0
-  const failedEntries = toNonNegativeNumber(data.failedEntries) ?? 0
-  const processedEntries = successEntries + failedEntries
-  const progressPercent =
-    totalEntries > 0
-      ? Math.min(100, Math.round((processedEntries / totalEntries) * 100))
-      : finishedAt
-        ? 100
-        : 0
-
-  const hasArchiveFields =
-    Boolean(startedAt || finishedAt) ||
-    durationMs > 0 ||
-    totalEntries > 0 ||
-    successEntries > 0 ||
-    failedEntries > 0
-  if (!hasArchiveFields) {
-    return null
-  }
-
-  return {
-    sessionId: sessionID,
-    startedAt,
-    finishedAt,
-    durationMs,
-    totalEntries,
-    successEntries,
-    failedEntries,
-    processedEntries,
-    progressPercent,
-    result: failedEntries > 0 ? 'failure' : 'success',
-    createdAt: startedAt || finishedAt,
-  }
-}
-
 const formatArchiveSummary = (summary: ArchiveSummary): string =>
   `解压与上传摘要：压缩包 ${summary.archivesProcessed}，解压 ${summary.extracted}，上传 ${summary.uploaded}，跳过 ${summary.skipped}，失败 ${summary.failed}`
 
@@ -772,11 +707,6 @@ export function StoragePage() {
   const [uploadStageAProgress, setUploadStageAProgress] = useState(0)
   const [uploadStageAActive, setUploadStageAActive] = useState(false)
   const uploadAbortControllerRef = useRef<AbortController | null>(null)
-  const [uploadStageBSessionID, setUploadStageBSessionID] = useState('')
-  const [uploadStageBSummary, setUploadStageBSummary] = useState<UploadSessionSummary | null>(null)
-  const [uploadStageBFailureSummary, setUploadStageBFailureSummary] = useState('')
-  const [uploadStageBPolling, setUploadStageBPolling] = useState(false)
-  const uploadStageBPollTokenRef = useRef(0)
 
   const [renameVisible, setRenameVisible] = useState(false)
   const [renamingSourceKey, setRenamingSourceKey] = useState('')
@@ -830,18 +760,9 @@ export function StoragePage() {
     () => () => {
       uploadAbortControllerRef.current?.abort()
       uploadAbortControllerRef.current = null
-      uploadStageBPollTokenRef.current += 1
     },
     [],
   )
-
-  const resetUploadStageBState = () => {
-    uploadStageBPollTokenRef.current += 1
-    setUploadStageBPolling(false)
-    setUploadStageBSessionID('')
-    setUploadStageBSummary(null)
-    setUploadStageBFailureSummary('')
-  }
 
   const getQuery = () => {
     const values = queryForm.getFieldsValue()
@@ -955,7 +876,6 @@ export function StoragePage() {
     if (!canWrite) {
       return
     }
-    resetUploadStageBState()
 
     let currentLimitBytes = uploadSizeLimitBytes
     try {
@@ -1046,10 +966,9 @@ export function StoragePage() {
         },
       )
       setUploadStageAProgress(100)
-      const responseData = response.data?.data
-      const summary = parseUploadSummary(responseData, uploadableFiles.length)
-      const archiveSummary = parseArchiveSummary(responseData)
-      const failureReasonSummary = parseFailureReasonSummary(responseData)
+      const summary = parseUploadSummary(response.data?.data, uploadableFiles.length)
+      const archiveSummary = parseArchiveSummary(response.data?.data)
+      const failureReasonSummary = parseFailureReasonSummary(response.data?.data)
       const archiveSummaryText = archiveSummary ? `；${formatArchiveSummary(archiveSummary)}` : ''
       const failureReasonText = failureReasonSummary ? ` 失败原因摘要：${failureReasonSummary}。` : ''
       if (summary.failureCount > 0) {
@@ -1066,19 +985,6 @@ export function StoragePage() {
           queryForm.setFieldValue('prefix', '')
           messageApi.info('已清空前缀以展示最新上传对象')
         }
-      }
-
-      const sessionID = parseUploadSessionID(responseData)
-      if (sessionID) {
-        setUploadStageBSessionID(sessionID)
-        const initialSessionSummary = parseArchiveSessionSummaryFromUploadResponse(
-          responseData,
-          sessionID,
-        )
-        if (initialSessionSummary) {
-          setUploadStageBSummary(initialSessionSummary)
-        }
-        void pollUploadStageBSession(projectID, sessionID)
       }
 
       setPendingUploadFiles([])
@@ -1393,101 +1299,6 @@ export function StoragePage() {
     )
     const logs = response.data.data?.logs ?? []
     return buildFailureSummaryFromAuditLogs(logs)
-  }
-
-  const loadArchiveSessionSummaryBySessionID = async (
-    projectID: number,
-    sessionID: string,
-  ): Promise<UploadSessionSummary | null> => {
-    const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
-      `/projects/${projectID}/storage/audits`,
-      {
-        params: {
-          action: 'object.upload_archive',
-          sessionId: sessionID,
-          limit: 5,
-          offset: 0,
-        },
-      },
-    )
-    const logs = response.data.data?.logs ?? []
-    for (const log of logs) {
-      const parsed = parseArchiveSessionSummary(log)
-      if (parsed && parsed.sessionId === sessionID) {
-        return parsed
-      }
-    }
-    return null
-  }
-
-  const isUploadStageBCompleted = (summary: UploadSessionSummary): boolean => {
-    if (summary.progressPercent >= 100) {
-      return true
-    }
-    if (normalizeString(summary.finishedAt)) {
-      return true
-    }
-    const result = normalizeString(summary.result)
-    return result === 'success' || result === 'failure'
-  }
-
-  const waitUploadStageBPollInterval = () =>
-    new Promise<void>((resolve) => {
-      window.setTimeout(resolve, UPLOAD_STAGE_B_POLL_INTERVAL_MS)
-    })
-
-  const pollUploadStageBSession = async (projectID: number, sessionID: string) => {
-    if (!Number.isFinite(projectID) || projectID <= 0 || !sessionID) {
-      return
-    }
-
-    const token = uploadStageBPollTokenRef.current + 1
-    uploadStageBPollTokenRef.current = token
-    setUploadStageBSessionID(sessionID)
-    setUploadStageBPolling(true)
-
-    for (let attempt = 0; attempt < UPLOAD_STAGE_B_MAX_POLL_ATTEMPTS; attempt += 1) {
-      if (uploadStageBPollTokenRef.current !== token) {
-        return
-      }
-
-      try {
-        const summary = await loadArchiveSessionSummaryBySessionID(projectID, sessionID)
-        if (uploadStageBPollTokenRef.current !== token) {
-          return
-        }
-
-        if (summary) {
-          setUploadStageBSummary(summary)
-          if (summary.failedEntries > 0) {
-            const failureSummary = await loadFailureSummaryForSession(projectID, sessionID)
-            if (uploadStageBPollTokenRef.current !== token) {
-              return
-            }
-            setUploadStageBFailureSummary(failureSummary)
-          } else {
-            setUploadStageBFailureSummary('')
-          }
-
-          if (isUploadStageBCompleted(summary)) {
-            setUploadStageBPolling(false)
-            void loadUploadSessionSummaries(projectID)
-            return
-          }
-        }
-      } catch {
-        // Keep polling; transient query failures should not interrupt stage B tracking.
-      }
-
-      if (attempt < UPLOAD_STAGE_B_MAX_POLL_ATTEMPTS - 1) {
-        await waitUploadStageBPollInterval()
-      }
-    }
-
-    if (uploadStageBPollTokenRef.current === token) {
-      setUploadStageBPolling(false)
-      messageApi.warning('上传阶段 B 进度查询超时，可稍后点击“刷新会话”查看最新状态。')
-    }
   }
 
   const loadUploadSessionSummaries = async (projectIDInput?: number) => {
@@ -1822,7 +1633,6 @@ export function StoragePage() {
                   const projectID = Number(value)
                   void loadBucketsByProject(projectID)
                   void loadUploadSessionSummaries(projectID)
-                  resetUploadStageBState()
                   queryForm.setFieldValue('prefix', '')
                   setCurrentPrefix('')
                   setObjects([])
@@ -1952,69 +1762,6 @@ export function StoragePage() {
                 <Typography.Text type="secondary" data-testid="upload-stage-a-percent">
                   当前传输进度：{uploadStageAProgress}%
                 </Typography.Text>
-              </Space>
-            ) : null}
-            {uploadStageBSessionID ? (
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <Typography.Text data-testid="upload-stage-b-label">
-                  上传阶段 B（后端处理）
-                </Typography.Text>
-                <Typography.Text type="secondary" data-testid="upload-stage-b-session-id">
-                  会话：{uploadStageBSessionID}
-                </Typography.Text>
-                <Progress
-                  percent={uploadStageBSummary?.progressPercent ?? 0}
-                  size="small"
-                  status={
-                    uploadStageBPolling
-                      ? 'active'
-                      : uploadStageBSummary?.result === 'failure'
-                        ? 'exception'
-                        : uploadStageBSummary
-                          ? 'success'
-                          : 'normal'
-                  }
-                  data-testid="upload-stage-b-progress"
-                />
-                <Typography.Text type="secondary" data-testid="upload-stage-b-counts">
-                  进度：{uploadStageBSummary?.processedEntries ?? 0}/
-                  {uploadStageBSummary?.totalEntries ?? 0}；成功：
-                  {uploadStageBSummary?.successEntries ?? 0}，失败：
-                  {uploadStageBSummary?.failedEntries ?? 0}
-                </Typography.Text>
-                <Typography.Text type="secondary" data-testid="upload-stage-b-time">
-                  开始：{formatDateTimeText(uploadStageBSummary?.startedAt ?? '')}，结束：
-                  {formatDateTimeText(uploadStageBSummary?.finishedAt ?? '')}，耗时：
-                  {formatDurationText(uploadStageBSummary?.durationMs ?? 0)}
-                </Typography.Text>
-                <Typography.Text type="secondary" data-testid="upload-stage-b-failure-summary">
-                  失败摘要：{uploadStageBFailureSummary || '当前会话无失败摘要。'}
-                </Typography.Text>
-                <Space>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      if (uploadStageBSummary) {
-                        void openSessionDetail(uploadStageBSummary)
-                      }
-                    }}
-                    disabled={!uploadStageBSummary}
-                  >
-                    查看明细
-                  </Button>
-                  <Button
-                    size="small"
-                    loading={uploadStageBPolling}
-                    onClick={() => {
-                      const { projectID } = getQuery()
-                      if (projectID && uploadStageBSessionID) {
-                        void pollUploadStageBSession(projectID, uploadStageBSessionID)
-                      }
-                    }}
-                  >
-                    刷新阶段 B
-                  </Button>
-                </Space>
               </Space>
             ) : null}
             <Input
