@@ -86,6 +86,9 @@ func New() (*Application, error) {
 	if err := projectService.RegisterObjectStorageProvider(provider.NewTencentCOSProvider()); err != nil {
 		return nil, fmt.Errorf("register tencent cos provider: %w", err)
 	}
+	if err := projectService.RegisterCDNProvider(provider.NewAliyunCDNProvider()); err != nil {
+		return nil, fmt.Errorf("register aliyun cdn provider: %w", err)
+	}
 	if err := projectService.RegisterCDNProvider(provider.NewTencentCDNProvider()); err != nil {
 		return nil, fmt.Errorf("register tencent cdn provider: %w", err)
 	}
