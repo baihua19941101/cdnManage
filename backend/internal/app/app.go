@@ -80,6 +80,9 @@ func New() (*Application, error) {
 		txManager,
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
+	if err := projectService.RegisterObjectStorageProvider(provider.NewAliyunOSSProvider()); err != nil {
+		return nil, fmt.Errorf("register aliyun oss provider: %w", err)
+	}
 	if err := projectService.RegisterObjectStorageProvider(provider.NewTencentCOSProvider()); err != nil {
 		return nil, fmt.Errorf("register tencent cos provider: %w", err)
 	}
