@@ -206,6 +206,9 @@ func (s *Service) Create(ctx context.Context, input CreateProjectInput) (*model.
 	if err := validateBindings(normalizedBuckets, input.CDNs); err != nil {
 		return nil, err
 	}
+	if err := s.validateBindingProviderRegistration(normalizedBuckets, input.CDNs); err != nil {
+		return nil, err
+	}
 
 	project := &model.Project{
 		Name:        input.Name,
@@ -228,6 +231,9 @@ func (s *Service) Update(ctx context.Context, projectID uint64, input UpdateProj
 		return nil, err
 	}
 	if err := validateBindings(normalizedBuckets, input.CDNs); err != nil {
+		return nil, err
+	}
+	if err := s.validateBindingProviderRegistration(normalizedBuckets, input.CDNs); err != nil {
 		return nil, err
 	}
 
@@ -280,6 +286,9 @@ func (s *Service) UpdateCDNs(ctx context.Context, projectID uint64, cdns []Proje
 		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
 	}
 	if err := validateCDNBindings(cdns); err != nil {
+		return nil, err
+	}
+	if err := s.validateBindingProviderRegistration(nil, cdns); err != nil {
 		return nil, err
 	}
 
@@ -953,6 +962,41 @@ func validateCDNBindings(cdns []ProjectCDNInput) error {
 	}
 
 	return nil
+}
+
+func (s *Service) validateBindingProviderRegistration(buckets []ProjectBucketInput, cdns []ProjectCDNInput) error {
+	for index, bucket := range buckets {
+		providerType := strings.TrimSpace(bucket.ProviderType)
+		if providerType == "" {
+			continue
+		}
+		if _, err := s.providers.ObjectStorage(provider.Type(providerType)); err != nil {
+			return bindingProviderNotRegisteredError("buckets", index, providerType, "object_storage")
+		}
+	}
+
+	for index, cdn := range cdns {
+		providerType := strings.TrimSpace(cdn.ProviderType)
+		if providerType == "" {
+			continue
+		}
+		if _, err := s.providers.CDN(provider.Type(providerType)); err != nil {
+			return bindingProviderNotRegisteredError("cdns", index, providerType, "cdn")
+		}
+	}
+
+	return nil
+}
+
+func bindingProviderNotRegisteredError(bindingType string, index int, providerType, providerService string) error {
+	path := fmt.Sprintf("%s[%d].providerType", bindingType, index)
+	return httpresp.NewAppError(400, "provider_not_registered", "binding provider is not registered", map[string]any{
+		"bindingType":     bindingType,
+		"bindingIndex":    index,
+		"bindingPath":     path,
+		"providerType":    providerType,
+		"providerService": providerService,
+	})
 }
 
 func projectBucketInputProviderType(buckets []ProjectBucketInput) string {
