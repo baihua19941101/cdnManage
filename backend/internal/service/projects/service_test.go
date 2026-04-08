@@ -351,6 +351,143 @@ func TestServiceCreateRejectsUnregisteredCDNProvider(t *testing.T) {
 	require.Equal(t, "cdn", details["providerService"])
 }
 
+func TestServiceUpdateRejectsUnregisteredBucketProvider(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	require.NoError(t, service.RegisterObjectStorageProvider(&fakeObjectStorageProvider{
+		providerType: provider.TypeAliyun,
+	}))
+	require.NoError(t, service.RegisterCDNProvider(&fakeCDNProvider{
+		providerType: provider.TypeAliyun,
+	}))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "registered-provider-update-base-" + suffix,
+		Description: "base project for update provider registration validation",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-base-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-base-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = service.Update(ctx, project.ID, UpdateProjectInput{
+		Name:        "registered-provider-update-base-" + suffix,
+		Description: "update should reject unregistered provider",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeTencent,
+				BucketName:   "bucket-unregistered-" + suffix,
+				Region:       "ap-guangzhou",
+				Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-base-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "provider_not_registered", appErr.Code)
+
+	details, ok := appErr.Details.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "buckets", details["bindingType"])
+	require.Equal(t, "buckets[0].providerType", details["bindingPath"])
+	require.Equal(t, model.ProviderTypeTencent, details["providerType"])
+	require.Equal(t, "object_storage", details["providerService"])
+}
+
+func TestServiceUpdateCDNsRejectsUnregisteredCDNProvider(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	require.NoError(t, service.RegisterObjectStorageProvider(&fakeObjectStorageProvider{
+		providerType: provider.TypeAliyun,
+	}))
+	require.NoError(t, service.RegisterCDNProvider(&fakeCDNProvider{
+		providerType: provider.TypeAliyun,
+	}))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "registered-cdn-update-base-" + suffix,
+		Description: "base project for update cdn provider registration validation",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-base-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-base-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = service.UpdateCDNs(ctx, project.ID, []ProjectCDNInput{
+		{
+			ProviderType: model.ProviderTypeTencent,
+			CDNEndpoint:  "https://cdn-unregistered-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		},
+	})
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "provider_not_registered", appErr.Code)
+
+	details, ok := appErr.Details.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "cdns", details["bindingType"])
+	require.Equal(t, "cdns[0].providerType", details["bindingPath"])
+	require.Equal(t, model.ProviderTypeTencent, details["providerType"])
+	require.Equal(t, "cdn", details["providerService"])
+}
+
 func TestServiceCreateEncryptsCredentialAndGetByIDReturnsMaskedCredential(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
