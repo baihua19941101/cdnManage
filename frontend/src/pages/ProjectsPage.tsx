@@ -775,7 +775,9 @@ export function ProjectsPage() {
                           <List.Item>
                             <Space direction="vertical" size={0}>
                               <Space size={8}>
-                                <Typography.Text strong>{cdn.cdnEndpoint}</Typography.Text>
+                                <Typography.Text strong>
+                                  CDN 域名: {cdn.cdnEndpoint}
+                                </Typography.Text>
                                 <Tag color={providerTagColor[cdn.providerType] ?? 'default'}>
                                   {cdn.providerType}
                                 </Tag>
@@ -1107,9 +1109,9 @@ export function ProjectsPage() {
                             </Col>
                             <Col span={8}>
                               <Form.Item
-                                label="CDN Endpoint"
+                                label="CDN 域名"
                                 name={[field.name, 'cdnEndpoint']}
-                                rules={[{ required: true, message: '请输入 CDN Endpoint' }]}
+                                rules={[{ required: true, message: '请输入 CDN 域名' }]}
                               >
                                 <Input />
                               </Form.Item>
