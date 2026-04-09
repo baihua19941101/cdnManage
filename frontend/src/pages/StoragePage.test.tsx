@@ -287,10 +287,10 @@ describe('StoragePage upload stage A interactions', () => {
       throw new Error(`unexpected GET ${String(url)}`)
     })
 
-    let resolveUpload: ((value: unknown) => void) | null = null
+    let resolveUpload: any = null
     vi.spyOn(apiClient, 'post').mockImplementation(async (_url, _data, config) => {
       config?.onUploadProgress?.({ loaded: 5, total: 10 } as never)
-      return await new Promise((resolve) => {
+      return await new Promise<unknown>((resolve) => {
         resolveUpload = resolve
       })
     })
@@ -307,16 +307,18 @@ describe('StoragePage upload stage A interactions', () => {
     expect(screen.queryByTestId('upload-stage-a-percent')).not.toBeInTheDocument()
     expect(progress).toHaveTextContent('50%')
 
-    resolveUpload?.({
-      data: {
-        code: 'success',
-        message: 'ok',
+    if (resolveUpload) {
+      resolveUpload({
         data: {
-          summary: { success: 1, failure: 0 },
-          results: [{ fileName: 'demo.txt', result: 'success' }],
+          code: 'success',
+          message: 'ok',
+          data: {
+            summary: { success: 1, failure: 0 },
+            results: [{ fileName: 'demo.txt', result: 'success' }],
+          },
         },
-      },
-    })
+      })
+    }
 
     await waitFor(() => {
       expect(screen.queryByTestId('upload-stage-a-progress')).not.toBeInTheDocument()
@@ -379,5 +381,160 @@ describe('StoragePage upload stage A interactions', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('upload-stage-a-progress')).not.toBeInTheDocument()
     })
+  }, 20000)
+
+  it('polls stage B session summary and renders session progress block', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url, config) => {
+      if (url === '/storage/upload-policy') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { maxUploadSizeBytes: 20 * 1024 * 1024 },
+          },
+        } as never
+      }
+      if (url === '/projects') {
+        return {
+          data: { code: 'success', message: 'ok', data: [{ id: 9, name: 'Stage B Project' }] },
+        } as never
+      }
+      if (url === '/projects/9') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { id: 9, buckets: [{ bucketName: 'demo-bucket' }] },
+          },
+        } as never
+      }
+      if (url === '/projects/9/storage/objects') {
+        return { data: { code: 'success', message: 'ok', data: { objects: [] } } } as never
+      }
+      if (url === '/projects/9/storage/audits') {
+        const params = (config as { params?: Record<string, unknown> } | undefined)?.params ?? {}
+        if (params.action === 'object.upload_archive' && params.sessionId === 'archive-9') {
+          return {
+            data: {
+              code: 'success',
+              message: 'ok',
+              data: {
+                logs: [
+                  {
+                    id: 101,
+                    actorUserId: 1,
+                    action: 'object.upload_archive',
+                    targetType: 'object',
+                    targetIdentifier: 'archive-9',
+                    result: 'failure',
+                    requestId: 'req-1',
+                    createdAt: '2026-04-09T10:00:00Z',
+                    metadata: {
+                      sessionId: 'archive-9',
+                      startedAt: '2026-04-09T10:00:00Z',
+                      finishedAt: '2026-04-09T10:00:12Z',
+                      durationMs: 12000,
+                      totalEntries: 3,
+                      successEntries: 2,
+                      failedEntries: 1,
+                    },
+                  },
+                ],
+              },
+            },
+          } as never
+        }
+        if (
+          params.action === 'object.upload' &&
+          params.sessionId === 'archive-9' &&
+          params.result === 'failure'
+        ) {
+          return {
+            data: {
+              code: 'success',
+              message: 'ok',
+              data: {
+                logs: [
+                  {
+                    id: 201,
+                    actorUserId: 1,
+                    action: 'object.upload',
+                    targetType: 'object',
+                    targetIdentifier: 'dist/a.js',
+                    result: 'failure',
+                    requestId: 'req-2',
+                    createdAt: '2026-04-09T10:00:10Z',
+                    metadata: {
+                      fileName: 'dist/a.js',
+                      reason: 'permission denied',
+                    },
+                  },
+                ],
+              },
+            },
+          } as never
+        }
+        if (params.action === 'object.upload_archive' && Number(params.limit) === 20) {
+          return {
+            data: {
+              code: 'success',
+              message: 'ok',
+              data: {
+                logs: [
+                  {
+                    id: 101,
+                    actorUserId: 1,
+                    action: 'object.upload_archive',
+                    targetType: 'object',
+                    targetIdentifier: 'archive-9',
+                    result: 'failure',
+                    requestId: 'req-1',
+                    createdAt: '2026-04-09T10:00:00Z',
+                    metadata: {
+                      sessionId: 'archive-9',
+                      startedAt: '2026-04-09T10:00:00Z',
+                      finishedAt: '2026-04-09T10:00:12Z',
+                      durationMs: 12000,
+                      totalEntries: 3,
+                      successEntries: 2,
+                      failedEntries: 1,
+                    },
+                  },
+                ],
+              },
+            },
+          } as never
+        }
+        return { data: { code: 'success', message: 'ok', data: { logs: [] } } } as never
+      }
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
+      data: {
+        code: 'success',
+        message: 'ok',
+        data: {
+          sessionId: 'archive-9',
+          summary: { success: 2, failure: 1 },
+          results: [{ fileName: 'package.zip', result: 'success' }],
+        },
+      },
+    } as never)
+
+    render(<StoragePage />)
+    await selectProjectAndBucket('9 - Stage B Project', 'demo-bucket')
+    await chooseSingleUploadFile(
+      new File(['zip'], 'package.zip', { type: 'application/zip' }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /上\s*传|上传/ }))
+
+    expect(await screen.findByTestId('upload-stage-b-progress')).toBeInTheDocument()
+    expect(await screen.findByText(/会话 ID：archive-9/)).toBeInTheDocument()
+    expect(await screen.findByText(/处理进度：3\/3/)).toBeInTheDocument()
+    expect(await screen.findByText(/成功：2，失败：1/)).toBeInTheDocument()
+    const failureTexts = await screen.findAllByText(/dist\/a\.js: permission denied/)
+    expect(failureTexts.length).toBeGreaterThan(0)
   }, 20000)
 })
