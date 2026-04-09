@@ -3,11 +3,31 @@ package config
 import "errors"
 
 const (
-	DefaultMaxUploadFileSizeMB int64 = 20
-	DefaultArchiveParallelism        = 4
-	MinArchiveParallelism            = 2
-	MaxArchiveParallelism            = 8
-	bytesPerMB                 int64 = 1024 * 1024
+	DefaultMaxUploadFileSizeMB   int64 = 20
+	DefaultArchiveParallelism          = 4
+	MinArchiveParallelism              = 2
+	MaxArchiveParallelism              = 8
+	DefaultUploadFileParallelism       = 4
+	MinUploadFileParallelism           = 1
+	MaxUploadFileParallelism           = 32
+
+	DefaultDeleteParallelism       = 2
+	MinDeleteParallelism           = 1
+	MaxDeleteParallelism           = 16
+	DefaultDeleteBatchParallelism  = 4
+	MinDeleteBatchParallelism      = 1
+	MaxDeleteBatchParallelism      = 32
+	DefaultDeleteFileParallelism   = 8
+	MinDeleteFileParallelism       = 1
+	MaxDeleteFileParallelism       = 64
+	DefaultDeleteRequestTimeoutSec = 30
+	MinDeleteRequestTimeoutSec     = 5
+	MaxDeleteRequestTimeoutSec     = 300
+	DefaultDeleteListPageSize      = 100
+	MinDeleteListPageSize          = 10
+	MaxDeleteListPageSize          = 1000
+
+	bytesPerMB int64 = 1024 * 1024
 )
 
 // ServerConfig contains network settings for the HTTP server.
@@ -71,6 +91,7 @@ type CORSConfig struct {
 type UploadConfig struct {
 	MaxFileSizeMB      int64 `yaml:"max_file_size_mb"`
 	ArchiveParallelism int   `yaml:"archive_parallelism"`
+	FileParallelism    int   `yaml:"file_parallelism"`
 }
 
 func (c *UploadConfig) ApplyDefaults() {
@@ -86,6 +107,15 @@ func (c *UploadConfig) ApplyDefaults() {
 	if c.ArchiveParallelism > MaxArchiveParallelism {
 		c.ArchiveParallelism = MaxArchiveParallelism
 	}
+	if c.FileParallelism == 0 {
+		c.FileParallelism = DefaultUploadFileParallelism
+	}
+	if c.FileParallelism < MinUploadFileParallelism {
+		c.FileParallelism = MinUploadFileParallelism
+	}
+	if c.FileParallelism > MaxUploadFileParallelism {
+		c.FileParallelism = MaxUploadFileParallelism
+	}
 }
 
 func (c UploadConfig) MaxFileSizeBytes() int64 {
@@ -94,6 +124,67 @@ func (c UploadConfig) MaxFileSizeBytes() int64 {
 		maxFileSizeMB = DefaultMaxUploadFileSizeMB
 	}
 	return maxFileSizeMB * bytesPerMB
+}
+
+// DeleteConfig defines delete operation limits.
+type DeleteConfig struct {
+	Parallelism           int `yaml:"parallelism"`
+	BatchParallelism      int `yaml:"batch_parallelism"`
+	FileParallelism       int `yaml:"file_parallelism"`
+	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
+	ListPageSize          int `yaml:"list_page_size"`
+}
+
+func (c *DeleteConfig) ApplyDefaults() {
+	if c.Parallelism == 0 {
+		c.Parallelism = DefaultDeleteParallelism
+	}
+	if c.Parallelism < MinDeleteParallelism {
+		c.Parallelism = MinDeleteParallelism
+	}
+	if c.Parallelism > MaxDeleteParallelism {
+		c.Parallelism = MaxDeleteParallelism
+	}
+
+	if c.BatchParallelism == 0 {
+		c.BatchParallelism = DefaultDeleteBatchParallelism
+	}
+	if c.BatchParallelism < MinDeleteBatchParallelism {
+		c.BatchParallelism = MinDeleteBatchParallelism
+	}
+	if c.BatchParallelism > MaxDeleteBatchParallelism {
+		c.BatchParallelism = MaxDeleteBatchParallelism
+	}
+
+	if c.FileParallelism == 0 {
+		c.FileParallelism = DefaultDeleteFileParallelism
+	}
+	if c.FileParallelism < MinDeleteFileParallelism {
+		c.FileParallelism = MinDeleteFileParallelism
+	}
+	if c.FileParallelism > MaxDeleteFileParallelism {
+		c.FileParallelism = MaxDeleteFileParallelism
+	}
+
+	if c.RequestTimeoutSeconds == 0 {
+		c.RequestTimeoutSeconds = DefaultDeleteRequestTimeoutSec
+	}
+	if c.RequestTimeoutSeconds < MinDeleteRequestTimeoutSec {
+		c.RequestTimeoutSeconds = MinDeleteRequestTimeoutSec
+	}
+	if c.RequestTimeoutSeconds > MaxDeleteRequestTimeoutSec {
+		c.RequestTimeoutSeconds = MaxDeleteRequestTimeoutSec
+	}
+
+	if c.ListPageSize == 0 {
+		c.ListPageSize = DefaultDeleteListPageSize
+	}
+	if c.ListPageSize < MinDeleteListPageSize {
+		c.ListPageSize = MinDeleteListPageSize
+	}
+	if c.ListPageSize > MaxDeleteListPageSize {
+		c.ListPageSize = MaxDeleteListPageSize
+	}
 }
 
 // AppConfig aggregates all configurable properties.
@@ -107,11 +198,13 @@ type AppConfig struct {
 	SuperAdmin   SuperAdminConfig `yaml:"super_admin"`
 	CORS         CORSConfig       `yaml:"cors"`
 	Upload       UploadConfig     `yaml:"upload"`
+	Delete       DeleteConfig     `yaml:"delete"`
 	RequestLimit int              `yaml:"request_limit"`
 }
 
 func (c *AppConfig) ApplyDefaults() {
 	c.Upload.ApplyDefaults()
+	c.Delete.ApplyDefaults()
 }
 
 // Validate ensures required fields are present.

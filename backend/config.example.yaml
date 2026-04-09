@@ -89,3 +89,18 @@ upload:
   max_file_size_mb: 20
   # 压缩包条目并发上传 worker 数，默认 4，运行时会钳制到 2~8
   archive_parallelism: 4
+  # 单批次内文件上传并发 worker 数，默认 4，运行时会钳制到 1~32
+  file_parallelism: 4
+
+# 删除任务执行配置
+delete:
+  # 删除任务并发数，默认 2，运行时会钳制到 1~16
+  parallelism: 2
+  # 删除批次并发数，默认 4，运行时会钳制到 1~32
+  batch_parallelism: 4
+  # 批次内文件删除并发数，默认 8，运行时会钳制到 1~64
+  file_parallelism: 8
+  # 删除请求超时时间（秒），默认 30，运行时会钳制到 5~300
+  request_timeout_seconds: 30
+  # 列表分页大小，默认 100，运行时会钳制到 10~1000
+  list_page_size: 100
