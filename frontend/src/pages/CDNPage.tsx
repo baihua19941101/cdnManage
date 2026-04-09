@@ -145,6 +145,13 @@ export function CDNPage() {
   const [urlResult, setURLResult] = useState<CDNTaskResult | null>(null)
   const [directoryResult, setDirectoryResult] = useState<CDNTaskResult | null>(null)
   const [syncResult, setSyncResult] = useState<CDNTaskResult | null>(null)
+  const selectedProjectID = Form.useWatch('projectId', baseForm)
+
+  const hasCDNBindings = cdnOptions.length > 0
+  const hasBucketBindings = bucketOptions.length > 0
+  const hasSelectedProject = Boolean(selectedProjectID)
+  const disableURLAndDirectorySubmit = !canWrite || (hasSelectedProject && !hasCDNBindings)
+  const disableSyncSubmit = !canWrite || (hasSelectedProject && !hasBucketBindings)
 
   const getBasePayload = async () => {
     const values = await baseForm.validateFields()
@@ -422,6 +429,22 @@ export function CDNPage() {
               />
             </Form.Item>
           </Form>
+          {hasSelectedProject && !hasCDNBindings ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginTop: 12 }}
+              message="当前项目未绑定 CDN 域名，请先在项目配置中绑定 CDN 后再执行 URL 刷新或目录刷新。"
+            />
+          ) : null}
+          {hasSelectedProject && !hasBucketBindings ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginTop: 12 }}
+              message="当前项目未绑定 Bucket，请先在项目配置中绑定 Bucket 后再执行资源同步。"
+            />
+          ) : null}
         </Card>
 
         <Card
@@ -432,7 +455,7 @@ export function CDNPage() {
               icon={<LinkOutlined />}
               onClick={() => void submitURLRefresh()}
               loading={urlSubmitting}
-              disabled={!canWrite}
+              disabled={disableURLAndDirectorySubmit}
             >
               提交 URL 刷新
             </Button>
@@ -461,7 +484,7 @@ export function CDNPage() {
               icon={<ReloadOutlined />}
               onClick={() => void submitDirectoryRefresh()}
               loading={directorySubmitting}
-              disabled={!canWrite}
+              disabled={disableURLAndDirectorySubmit}
             >
               提交目录刷新
             </Button>
@@ -491,7 +514,7 @@ export function CDNPage() {
               icon={<CloudSyncOutlined />}
               onClick={() => void submitSyncResources()}
               loading={syncSubmitting}
-              disabled={!canWrite}
+              disabled={disableSyncSubmit}
             >
               提交资源同步
             </Button>
