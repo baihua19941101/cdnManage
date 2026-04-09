@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -394,22 +395,22 @@ func TestServiceUpdateRejectsUnregisteredBucketProvider(t *testing.T) {
 		Description: "update should reject unregistered provider",
 		Buckets: []ProjectBucketInput{
 			{
-				ProviderType: model.ProviderTypeTencent,
-				BucketName:   "bucket-unregistered-" + suffix,
-				Region:       "ap-guangzhou",
+				ProviderType:        model.ProviderTypeTencent,
+				BucketName:          "bucket-unregistered-" + suffix,
+				Region:              "ap-guangzhou",
 				CredentialOperation: "REPLACE",
-				Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
-				IsPrimary:    true,
+				Credential:          `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
+				IsPrimary:           true,
 			},
 		},
 		CDNs: []ProjectCDNInput{
 			{
-				ProviderType: model.ProviderTypeAliyun,
-				CDNEndpoint:  "https://cdn-base-" + suffix + ".example.com",
+				ProviderType:        model.ProviderTypeAliyun,
+				CDNEndpoint:         "https://cdn-base-" + suffix + ".example.com",
 				CredentialOperation: "REPLACE",
-				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
-				PurgeScope:   "url",
-				IsPrimary:    true,
+				Credential:          `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:          "url",
+				IsPrimary:           true,
 			},
 		},
 	})
@@ -1293,6 +1294,91 @@ func TestServiceRenameBucketDirectoryReturnsPartialFailureSummary(t *testing.T) 
 	require.Len(t, providerStub.renameRequests, 2)
 }
 
+func TestDeleteDirectoryRecursivelyUsesWorkerPoolAndKeepsStats(t *testing.T) {
+	service := NewService(nil, nil)
+	service.ConfigureDeleteParallelism(3)
+
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		objects: []provider.ObjectInfo{
+			{Key: "assets/a.js", IsDir: false},
+			{Key: "assets/b.js", IsDir: false},
+			{Key: "assets/sub/", IsDir: true},
+			{Key: "assets/sub/c.js", IsDir: false},
+			{Key: "assets/b.js", IsDir: false},
+		},
+		deleteCalls: make(map[string]int),
+	}
+
+	result := service.deleteDirectoryRecursively(context.Background(), providerStub, provider.DeleteObjectRequest{
+		Bucket: "bucket",
+		Region: "region",
+		Key:    "assets/",
+	})
+
+	require.True(t, result.Success)
+	require.Equal(t, "directory", result.TargetType)
+	require.Equal(t, 3, result.DeletedObjects)
+	require.Equal(t, 0, result.FailedObjects)
+	require.Equal(t, "directory deleted", result.Message)
+	require.Equal(t, 3, providerStub.uniqueDeleteCallCount())
+	require.Equal(t, 1, providerStub.deleteCalls["assets/a.js"])
+	require.Equal(t, 1, providerStub.deleteCalls["assets/b.js"])
+	require.Equal(t, 1, providerStub.deleteCalls["assets/sub/c.js"])
+	require.GreaterOrEqual(t, providerStub.maxConcurrency(), 2)
+}
+
+func TestDeleteDirectoryRecursivelyKeepsFailureSummaryStableUnderConcurrency(t *testing.T) {
+	service := NewService(nil, nil)
+	service.ConfigureDeleteParallelism(4)
+
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		objects: []provider.ObjectInfo{
+			{Key: "assets/d.js", IsDir: false},
+			{Key: "assets/c.js", IsDir: false},
+			{Key: "assets/b.js", IsDir: false},
+			{Key: "assets/a.js", IsDir: false},
+			{Key: "assets/c.js", IsDir: false},
+		},
+		deleteErrors: map[string]error{
+			"assets/a.js": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"delete_object",
+				provider.ErrCodeOperationFailed,
+				"delete failed",
+				false,
+				nil,
+			),
+			"assets/c.js": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"delete_object",
+				provider.ErrCodeOperationFailed,
+				"delete failed",
+				false,
+				nil,
+			),
+		},
+		deleteCalls: make(map[string]int),
+	}
+
+	result := service.deleteDirectoryRecursively(context.Background(), providerStub, provider.DeleteObjectRequest{
+		Bucket: "bucket",
+		Region: "region",
+		Key:    "assets/",
+	})
+
+	require.False(t, result.Success)
+	require.Equal(t, "provider_operation_failed", result.ErrorCode)
+	require.Equal(t, 2, result.DeletedObjects)
+	require.Equal(t, 2, result.FailedObjects)
+	require.Contains(t, result.Message, "directory delete partially failed:")
+	require.Contains(t, result.Message, "assets/a.js:")
+	require.Contains(t, result.Message, "assets/c.js:")
+	require.Less(t, strings.Index(result.Message, "assets/a.js:"), strings.Index(result.Message, "assets/c.js:"))
+	require.Equal(t, 4, providerStub.uniqueDeleteCallCount())
+}
+
 func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
@@ -1551,6 +1637,110 @@ type fakeCDNProvider struct {
 	lastRefreshURLs          provider.RefreshURLsRequest
 	lastRefreshDirectories   provider.RefreshDirectoriesRequest
 	lastSyncResources        provider.SyncResourcesRequest
+}
+
+type directoryDeleteWorkerPoolProvider struct {
+	objects      []provider.ObjectInfo
+	deleteErrors map[string]error
+	deleteCalls  map[string]int
+	mu           sync.Mutex
+	inFlight     int
+	maxInFlight  int
+}
+
+func (p *directoryDeleteWorkerPoolProvider) Type() provider.Type {
+	return provider.TypeAliyun
+}
+
+func (p *directoryDeleteWorkerPoolProvider) Detect(_ context.Context, _ provider.CredentialPayload, _ string) (provider.Type, error) {
+	return provider.TypeAliyun, nil
+}
+
+func (p *directoryDeleteWorkerPoolProvider) ListObjects(_ context.Context, req provider.ListObjectsRequest) ([]provider.ObjectInfo, error) {
+	filtered := make([]provider.ObjectInfo, 0, len(p.objects))
+	for _, object := range p.objects {
+		if req.Prefix == "" || strings.HasPrefix(object.Key, req.Prefix) {
+			filtered = append(filtered, object)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+
+	start := 0
+	marker := strings.TrimSpace(req.Marker)
+	if marker != "" {
+		found := false
+		for i := range filtered {
+			if filtered[i].Key == marker {
+				start = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, nil
+		}
+	}
+	if start >= len(filtered) {
+		return nil, nil
+	}
+
+	maxKeys := req.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = len(filtered)
+	}
+	end := start + maxKeys
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return append([]provider.ObjectInfo(nil), filtered[start:end]...), nil
+}
+
+func (p *directoryDeleteWorkerPoolProvider) UploadObject(_ context.Context, _ provider.UploadObjectRequest) error {
+	return nil
+}
+
+func (p *directoryDeleteWorkerPoolProvider) DownloadObject(_ context.Context, _ provider.DownloadObjectRequest) (io.ReadCloser, provider.ObjectMeta, error) {
+	return nil, provider.ObjectMeta{}, nil
+}
+
+func (p *directoryDeleteWorkerPoolProvider) DeleteObject(_ context.Context, req provider.DeleteObjectRequest) error {
+	p.mu.Lock()
+	p.inFlight++
+	if p.inFlight > p.maxInFlight {
+		p.maxInFlight = p.inFlight
+	}
+	p.mu.Unlock()
+
+	time.Sleep(10 * time.Millisecond)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.inFlight--
+	p.deleteCalls[req.Key]++
+	if p.deleteErrors != nil {
+		if err, ok := p.deleteErrors[req.Key]; ok {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *directoryDeleteWorkerPoolProvider) RenameObject(_ context.Context, _ provider.RenameObjectRequest) error {
+	return nil
+}
+
+func (p *directoryDeleteWorkerPoolProvider) uniqueDeleteCallCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.deleteCalls)
+}
+
+func (p *directoryDeleteWorkerPoolProvider) maxConcurrency() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxInFlight
 }
 
 func (f *fakeCDNProvider) Type() provider.Type {

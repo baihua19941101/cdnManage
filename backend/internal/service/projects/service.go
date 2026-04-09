@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/baihua19941101/cdnManage/internal/config"
 	httpresp "github.com/baihua19941101/cdnManage/internal/http"
 	"github.com/baihua19941101/cdnManage/internal/model"
 	"github.com/baihua19941101/cdnManage/internal/provider"
@@ -18,12 +21,13 @@ import (
 )
 
 type Service struct {
-	projects         repository.ProjectRepository
-	tx               repository.TxManager
-	credentialCipher credentialCipher
-	providers        *provider.Registry
-	syncTaskCache    SyncTaskStatusCache
-	syncTaskTTL      time.Duration
+	projects          repository.ProjectRepository
+	tx                repository.TxManager
+	credentialCipher  credentialCipher
+	providers         *provider.Registry
+	syncTaskCache     SyncTaskStatusCache
+	syncTaskTTL       time.Duration
+	deleteParallelism int
 }
 
 const (
@@ -160,11 +164,12 @@ func NewService(projects repository.ProjectRepository, tx repository.TxManager, 
 	}
 
 	return &Service{
-		projects:         projects,
-		tx:               tx,
-		credentialCipher: credentialCipherInstance,
-		providers:        provider.NewRegistry(),
-		syncTaskTTL:      10 * time.Minute,
+		projects:          projects,
+		tx:                tx,
+		credentialCipher:  credentialCipherInstance,
+		providers:         provider.NewRegistry(),
+		syncTaskTTL:       10 * time.Minute,
+		deleteParallelism: config.DefaultDeleteParallelism,
 	}
 }
 
@@ -181,6 +186,19 @@ func (s *Service) ConfigureSyncTaskStatusCache(cache SyncTaskStatusCache, ttl ti
 	if ttl > 0 {
 		s.syncTaskTTL = ttl
 	}
+}
+
+func (s *Service) ConfigureDeleteParallelism(parallelism int) {
+	if parallelism <= 0 {
+		parallelism = config.DefaultDeleteParallelism
+	}
+	if parallelism < config.MinDeleteParallelism {
+		parallelism = config.MinDeleteParallelism
+	}
+	if parallelism > config.MaxDeleteParallelism {
+		parallelism = config.MaxDeleteParallelism
+	}
+	s.deleteParallelism = parallelism
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
@@ -442,17 +460,18 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 	}
 
 	queue := []string{prefix}
-	visited := make(map[string]struct{}, 8)
-	failureReasons := make([]string, 0, 3)
+	visitedDirectories := make(map[string]struct{}, 8)
+	scheduledObjects := make(map[string]struct{}, 64)
+	objectsToDelete := make([]string, 0, 64)
 	const maxKeys = 200
 
 	for len(queue) > 0 {
 		currentPrefix := queue[0]
 		queue = queue[1:]
-		if _, ok := visited[currentPrefix]; ok {
+		if _, ok := visitedDirectories[currentPrefix]; ok {
 			continue
 		}
-		visited[currentPrefix] = struct{}{}
+		visitedDirectories[currentPrefix] = struct{}{}
 
 		marker := ""
 		for {
@@ -478,27 +497,21 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 			for _, object := range objects {
 				lastMarker = object.Key
 				if object.IsDir {
-					normalized := strings.TrimSpace(object.Key)
+					normalized := ensureDirectoryPrefix(object.Key)
 					if normalized != "" {
 						queue = append(queue, normalized)
 					}
 					continue
 				}
-				err = storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
-					Bucket:     request.Bucket,
-					Region:     request.Region,
-					Key:        object.Key,
-					Credential: request.Credential,
-				})
-				if err != nil {
-					result.Success = false
-					result.FailedObjects++
-					if len(failureReasons) < 3 {
-						failureReasons = append(failureReasons, object.Key+": "+mapObjectStorageOperationError(err, "delete").Error())
-					}
+				key := strings.TrimSpace(object.Key)
+				if key == "" {
 					continue
 				}
-				result.DeletedObjects++
+				if _, duplicated := scheduledObjects[key]; duplicated {
+					continue
+				}
+				scheduledObjects[key] = struct{}{}
+				objectsToDelete = append(objectsToDelete, key)
 			}
 
 			if len(objects) < maxKeys || strings.TrimSpace(lastMarker) == "" || lastMarker == marker {
@@ -508,7 +521,78 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 		}
 	}
 
-	if !result.Success {
+	if len(objectsToDelete) == 0 {
+		result.Message = "directory deleted"
+		return result
+	}
+
+	parallelism := s.deleteParallelism
+	if parallelism <= 0 {
+		parallelism = config.DefaultDeleteParallelism
+	}
+	if parallelism > len(objectsToDelete) {
+		parallelism = len(objectsToDelete)
+	}
+
+	var (
+		mu               sync.Mutex
+		wg               sync.WaitGroup
+		deletedObjects   int
+		failedObjects    int
+		failureReasonsBy = make(map[string]string, 4)
+	)
+	jobs := make(chan string, len(objectsToDelete))
+
+	worker := func() {
+		defer wg.Done()
+		for key := range jobs {
+			err := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+				Bucket:     request.Bucket,
+				Region:     request.Region,
+				Key:        key,
+				Credential: request.Credential,
+			})
+
+			mu.Lock()
+			if err != nil {
+				failedObjects++
+				if _, exists := failureReasonsBy[key]; !exists {
+					failureReasonsBy[key] = mapObjectStorageOperationError(err, "delete").Error()
+				}
+			} else {
+				deletedObjects++
+			}
+			mu.Unlock()
+		}
+	}
+
+	wg.Add(parallelism)
+	for i := 0; i < parallelism; i++ {
+		go worker()
+	}
+	for _, key := range objectsToDelete {
+		jobs <- key
+	}
+	close(jobs)
+	wg.Wait()
+
+	result.DeletedObjects = deletedObjects
+	result.FailedObjects = failedObjects
+	if failedObjects > 0 {
+		result.Success = false
+		result.ErrorCode = "provider_operation_failed"
+		keys := make([]string, 0, len(failureReasonsBy))
+		for key := range failureReasonsBy {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		failureReasons := make([]string, 0, 3)
+		for _, key := range keys {
+			failureReasons = append(failureReasons, key+": "+failureReasonsBy[key])
+			if len(failureReasons) == 3 {
+				break
+			}
+		}
 		if len(failureReasons) > 0 {
 			result.Message = "directory delete partially failed: " + strings.Join(failureReasons, "; ")
 		} else {
