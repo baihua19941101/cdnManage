@@ -8,6 +8,7 @@ import {
   Input,
   Select,
   Space,
+  Tabs,
   Typography,
   message,
 } from 'antd'
@@ -39,17 +40,7 @@ type BaseFormValues = {
   bucketName?: string
 }
 
-type URLRefreshFormValues = {
-  urls: string
-}
-
-type DirectoryRefreshFormValues = {
-  directories: string
-}
-
-type SyncFormValues = {
-  paths: string
-}
+type OperationType = 'url' | 'directory' | 'sync'
 
 type ProjectOption = {
   id: number
@@ -73,6 +64,51 @@ const splitByLines = (value: string) =>
     .split('\n')
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
+
+const OPERATION_META: Record<
+  OperationType,
+  {
+    tabLabel: string
+    actionText: string
+    fieldLabel: string
+    placeholder: string
+    emptyInputMessage: string
+    successMessage: string
+    errorMessage: string
+    icon: JSX.Element
+  }
+> = {
+  url: {
+    tabLabel: 'URL 刷新',
+    actionText: '提交 URL 刷新',
+    fieldLabel: 'URLs（每行一个）',
+    placeholder: 'https://cdn.example.com/a.js\nhttps://cdn.example.com/b.css',
+    emptyInputMessage: '请至少输入一个 URL。',
+    successMessage: 'URL 刷新请求已提交。',
+    errorMessage: 'URL 刷新请求提交失败。',
+    icon: <LinkOutlined />,
+  },
+  directory: {
+    tabLabel: '目录刷新',
+    actionText: '提交目录刷新',
+    fieldLabel: 'Directories（每行一个）',
+    placeholder: '/static/\n/assets/images/',
+    emptyInputMessage: '请至少输入一个目录。',
+    successMessage: '目录刷新请求已提交。',
+    errorMessage: '目录刷新请求提交失败。',
+    icon: <ReloadOutlined />,
+  },
+  sync: {
+    tabLabel: '资源同步',
+    actionText: '提交资源同步',
+    fieldLabel: 'Paths（每行一个）',
+    placeholder: 'dist/app.js\ndist/app.css',
+    emptyInputMessage: '请至少输入一个资源路径。',
+    successMessage: '资源同步请求已提交。',
+    errorMessage: '资源同步请求提交失败。',
+    icon: <CloudSyncOutlined />,
+  },
+}
 
 function TaskResultCard({ result }: { result: CDNTaskResult | null }) {
   if (!result) {
@@ -127,24 +163,26 @@ function TaskResultCard({ result }: { result: CDNTaskResult | null }) {
 export function CDNPage() {
   const [messageApi, messageContext] = message.useMessage()
   const [baseForm] = Form.useForm<BaseFormValues>()
-  const [urlForm] = Form.useForm<URLRefreshFormValues>()
-  const [directoryForm] = Form.useForm<DirectoryRefreshFormValues>()
-  const [syncForm] = Form.useForm<SyncFormValues>()
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const canWrite = isPlatformAdminRole(platformRole)
 
-  const [urlSubmitting, setURLSubmitting] = useState(false)
-  const [directorySubmitting, setDirectorySubmitting] = useState(false)
-  const [syncSubmitting, setSyncSubmitting] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [activeOperation, setActiveOperation] = useState<OperationType>('url')
+  const [operationInputs, setOperationInputs] = useState<Record<OperationType, string>>({
+    url: '',
+    directory: '',
+    sync: '',
+  })
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [cdnOptions, setCDNOptions] = useState<string[]>([])
   const [bucketOptions, setBucketOptions] = useState<string[]>([])
   const [bindingsLoading, setBindingsLoading] = useState(false)
-
-  const [urlResult, setURLResult] = useState<CDNTaskResult | null>(null)
-  const [directoryResult, setDirectoryResult] = useState<CDNTaskResult | null>(null)
-  const [syncResult, setSyncResult] = useState<CDNTaskResult | null>(null)
+  const [results, setResults] = useState<Record<OperationType, CDNTaskResult | null>>({
+    url: null,
+    directory: null,
+    sync: null,
+  })
   const selectedProjectID = Form.useWatch('projectId', baseForm)
 
   const hasCDNBindings = cdnOptions.length > 0
@@ -152,6 +190,9 @@ export function CDNPage() {
   const hasSelectedProject = Boolean(selectedProjectID)
   const disableURLAndDirectorySubmit = !canWrite || (hasSelectedProject && !hasCDNBindings)
   const disableSyncSubmit = !canWrite || (hasSelectedProject && !hasBucketBindings)
+  const activeMeta = OPERATION_META[activeOperation]
+  const disableActiveSubmit =
+    activeOperation === 'sync' ? disableSyncSubmit : disableURLAndDirectorySubmit
 
   const getBasePayload = async () => {
     const values = await baseForm.validateFields()
@@ -178,11 +219,10 @@ export function CDNPage() {
     if (normalized.length === 0) {
       return ''
     }
-    const primary = items
-      .find((item) => {
-        const value = valueGetter(item)?.trim()
-        return Boolean(value) && primaryGetter(item)
-      })
+    const primary = items.find((item) => {
+      const value = valueGetter(item)?.trim()
+      return Boolean(value) && primaryGetter(item)
+    })
     const primaryValue = primary ? valueGetter(primary)?.trim() : ''
     return primaryValue || normalized[0]
   }
@@ -259,7 +299,7 @@ export function CDNPage() {
     void loadProjectOptions()
   }, [])
 
-  const submitURLRefresh = async () => {
+  const submitActiveOperation = async () => {
     if (!canWrite) {
       return
     }
@@ -267,104 +307,59 @@ export function CDNPage() {
     if (!basePayload) {
       return
     }
-
-    const values = await urlForm.validateFields()
-    const urls = splitByLines(values.urls)
-    if (urls.length === 0) {
-      messageApi.error('请至少输入一个 URL。')
-      return
-    }
-
-    setURLSubmitting(true)
-    try {
-      const response = await apiClient.post<ApiResponse<CDNTaskResult>>(
-        `/projects/${basePayload.projectID}/cdns/refresh-url`,
-        {
-          cdnEndpoint: basePayload.cdnEndpoint,
-          urls,
-        },
-      )
-      setURLResult(response.data.data ?? null)
-      messageApi.success('URL 刷新请求已提交。')
-    } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, 'URL 刷新请求提交失败。'))
-    } finally {
-      setURLSubmitting(false)
-    }
-  }
-
-  const submitDirectoryRefresh = async () => {
-    if (!canWrite) {
-      return
-    }
-    const basePayload = await getBasePayload()
-    if (!basePayload) {
-      return
-    }
-
-    const values = await directoryForm.validateFields()
-    const directories = splitByLines(values.directories)
-    if (directories.length === 0) {
-      messageApi.error('请至少输入一个目录。')
-      return
-    }
-
-    setDirectorySubmitting(true)
-    try {
-      const response = await apiClient.post<ApiResponse<CDNTaskResult>>(
-        `/projects/${basePayload.projectID}/cdns/refresh-directory`,
-        {
-          cdnEndpoint: basePayload.cdnEndpoint,
-          directories,
-        },
-      )
-      setDirectoryResult(response.data.data ?? null)
-      messageApi.success('目录刷新请求已提交。')
-    } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '目录刷新请求提交失败。'))
-    } finally {
-      setDirectorySubmitting(false)
-    }
-  }
-
-  const submitSyncResources = async () => {
-    if (!canWrite) {
-      return
-    }
-    const basePayload = await getBasePayload()
-    if (!basePayload) {
-      return
-    }
-
-    const values = await syncForm.validateFields()
-    if (!basePayload.bucketName) {
+    if (activeOperation === 'sync' && !basePayload.bucketName) {
       messageApi.error('请选择 Bucket Name。')
       return
     }
-    const paths = splitByLines(values.paths)
-    if (paths.length === 0) {
-      messageApi.error('请至少输入一个资源路径。')
+
+    const entries = splitByLines(operationInputs[activeOperation])
+    if (entries.length === 0) {
+      messageApi.error(activeMeta.emptyInputMessage)
       return
     }
 
-    setSyncSubmitting(true)
+    setSubmitting(true)
     try {
-      const response = await apiClient.post<ApiResponse<CDNTaskResult>>(
-        `/projects/${basePayload.projectID}/cdns/sync`,
-        {
-          cdnEndpoint: basePayload.cdnEndpoint,
-          bucketName: basePayload.bucketName,
-          paths,
-        },
-      )
-      setSyncResult(response.data.data ?? null)
-      messageApi.success('资源同步请求已提交。')
+      let response: { data: ApiResponse<CDNTaskResult> }
+      if (activeOperation === 'url') {
+        response = await apiClient.post<ApiResponse<CDNTaskResult>>(
+          `/projects/${basePayload.projectID}/cdns/refresh-url`,
+          {
+            cdnEndpoint: basePayload.cdnEndpoint,
+            urls: entries,
+          },
+        )
+      } else if (activeOperation === 'directory') {
+        response = await apiClient.post<ApiResponse<CDNTaskResult>>(
+          `/projects/${basePayload.projectID}/cdns/refresh-directory`,
+          {
+            cdnEndpoint: basePayload.cdnEndpoint,
+            directories: entries,
+          },
+        )
+      } else {
+        response = await apiClient.post<ApiResponse<CDNTaskResult>>(
+          `/projects/${basePayload.projectID}/cdns/sync`,
+          {
+            cdnEndpoint: basePayload.cdnEndpoint,
+            bucketName: basePayload.bucketName,
+            paths: entries,
+          },
+        )
+      }
+      setResults((prev) => ({
+        ...prev,
+        [activeOperation]: response.data.data ?? null,
+      }))
+      messageApi.success(activeMeta.successMessage)
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '资源同步请求提交失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, activeMeta.errorMessage))
     } finally {
-      setSyncSubmitting(false)
+      setSubmitting(false)
     }
   }
+
+  const activeResult = results[activeOperation]
 
   return (
     <>
@@ -448,88 +443,46 @@ export function CDNPage() {
         </Card>
 
         <Card
-          title="URL 刷新"
+          title="操作区"
           extra={
             <Button
               type="primary"
-              icon={<LinkOutlined />}
-              onClick={() => void submitURLRefresh()}
-              loading={urlSubmitting}
-              disabled={disableURLAndDirectorySubmit}
+              icon={activeMeta.icon}
+              onClick={() => void submitActiveOperation()}
+              loading={submitting}
+              disabled={disableActiveSubmit}
             >
-              提交 URL 刷新
+              {activeMeta.actionText}
             </Button>
           }
         >
-          <Form<URLRefreshFormValues> form={urlForm} layout="vertical" initialValues={{ urls: '' }}>
-            <Form.Item
-              label="URLs（每行一个）"
-              name="urls"
-              rules={[{ required: true, message: '请至少输入一个 URL' }]}
-            >
+          <Tabs
+            activeKey={activeOperation}
+            onChange={(key) => setActiveOperation(key as OperationType)}
+            items={[
+              { key: 'url', label: OPERATION_META.url.tabLabel },
+              { key: 'directory', label: OPERATION_META.directory.tabLabel },
+              { key: 'sync', label: OPERATION_META.sync.tabLabel },
+            ]}
+          />
+          <Form layout="vertical">
+            <Form.Item label={activeMeta.fieldLabel}>
               <Input.TextArea
                 rows={5}
-                placeholder={'https://cdn.example.com/a.js\nhttps://cdn.example.com/b.css'}
+                placeholder={activeMeta.placeholder}
+                aria-label={activeMeta.fieldLabel}
+                value={operationInputs[activeOperation]}
+                onChange={(event) => {
+                  const { value } = event.target
+                  setOperationInputs((prev) => ({
+                    ...prev,
+                    [activeOperation]: value,
+                  }))
+                }}
               />
             </Form.Item>
           </Form>
-          <TaskResultCard result={urlResult} />
-        </Card>
-
-        <Card
-          title="目录刷新"
-          extra={
-            <Button
-              type="primary"
-              icon={<ReloadOutlined />}
-              onClick={() => void submitDirectoryRefresh()}
-              loading={directorySubmitting}
-              disabled={disableURLAndDirectorySubmit}
-            >
-              提交目录刷新
-            </Button>
-          }
-        >
-          <Form<DirectoryRefreshFormValues>
-            form={directoryForm}
-            layout="vertical"
-            initialValues={{ directories: '' }}
-          >
-            <Form.Item
-              label="Directories（每行一个）"
-              name="directories"
-              rules={[{ required: true, message: '请至少输入一个目录' }]}
-            >
-              <Input.TextArea rows={5} placeholder={'/static/\n/assets/images/'} />
-            </Form.Item>
-          </Form>
-          <TaskResultCard result={directoryResult} />
-        </Card>
-
-        <Card
-          title="资源同步"
-          extra={
-            <Button
-              type="primary"
-              icon={<CloudSyncOutlined />}
-              onClick={() => void submitSyncResources()}
-              loading={syncSubmitting}
-              disabled={disableSyncSubmit}
-            >
-              提交资源同步
-            </Button>
-          }
-        >
-          <Form<SyncFormValues> form={syncForm} layout="vertical" initialValues={{ paths: '' }}>
-            <Form.Item
-              label="Paths（每行一个）"
-              name="paths"
-              rules={[{ required: true, message: '请至少输入一个资源路径' }]}
-            >
-              <Input.TextArea rows={5} placeholder={'dist/app.js\ndist/app.css'} />
-            </Form.Item>
-          </Form>
-          <TaskResultCard result={syncResult} />
+          <TaskResultCard result={activeResult} />
         </Card>
       </Space>
     </>
