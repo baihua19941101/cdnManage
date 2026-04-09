@@ -2,6 +2,8 @@ package projects
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,6 +26,11 @@ type Handler struct {
 	audits   repository.AuditLogRepository
 	recorder *auditservice.Recorder
 }
+
+const (
+	credentialOperationKeep    = "KEEP"
+	credentialOperationReplace = "REPLACE"
+)
 
 type projectScopeMiddleware interface {
 	Middleware() gin.HandlerFunc
@@ -123,6 +130,13 @@ type cdnTaskResultResponse struct {
 	SubmittedAt       string            `json:"submittedAt,omitempty"`
 	CompletedAt       string            `json:"completedAt,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
+}
+
+type bindingCredentialAuditEntry struct {
+	action           string
+	targetType       string
+	targetIdentifier string
+	metadata         gin.H
 }
 
 func NewHandler(service *serviceprojects.Service, audits repository.AuditLogRepository) *Handler {
@@ -227,6 +241,8 @@ func (h *Handler) Update(ctx *gin.Context) {
 		return
 	}
 
+	bindingAuditEntries := buildBindingCredentialAuditEntries(req)
+
 	project, err := h.service.Update(ctx.Request.Context(), projectID, serviceprojects.UpdateProjectInput{
 		Name:        req.Name,
 		Description: req.Description,
@@ -234,9 +250,12 @@ func (h *Handler) Update(ctx *gin.Context) {
 		CDNs:        toProjectCDNInputs(req.CDNs),
 	})
 	if err != nil {
+		h.recordBindingCredentialAudits(ctx, projectID, bindingAuditEntries, model.AuditResultFailure, err)
 		ctx.Error(err)
 		return
 	}
+
+	h.recordBindingCredentialAudits(ctx, projectID, bindingAuditEntries, model.AuditResultSuccess, nil)
 
 	httpresp.Success(ctx, toProjectResponse(project))
 }
@@ -299,12 +318,15 @@ func (h *Handler) UpdateCDNs(ctx *gin.Context) {
 		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid update project cdns request", gin.H{"error": err.Error()}))
 		return
 	}
+	bindingAuditEntries := buildCDNCredentialAuditEntries(req.CDNs)
 
 	cdns, err := h.service.UpdateCDNs(ctx.Request.Context(), projectID, toProjectCDNInputs(req.CDNs))
 	if err != nil {
+		h.recordBindingCredentialAudits(ctx, projectID, bindingAuditEntries, model.AuditResultFailure, err)
 		ctx.Error(err)
 		return
 	}
+	h.recordBindingCredentialAudits(ctx, projectID, bindingAuditEntries, model.AuditResultSuccess, nil)
 
 	response := make([]projectCDNResponse, 0, len(cdns))
 	for _, cdn := range cdns {
@@ -577,7 +599,151 @@ func endpointOrPrimary(endpoint string) string {
 	return endpoint
 }
 
+func buildBindingCredentialAuditEntries(req updateProjectRequest) []bindingCredentialAuditEntry {
+	total := len(req.Buckets) + len(req.CDNs)
+	entries := make([]bindingCredentialAuditEntry, 0, total)
+
+	for index, bucket := range req.Buckets {
+		operation := resolveCredentialOperation(bucket.ID, bucket.CredentialOperation)
+		entries = append(entries, bindingCredentialAuditEntry{
+			action:           credentialAuditAction(operation),
+			targetType:       "bucket",
+			targetIdentifier: bindingTargetIdentifier(bucket.ID, strings.TrimSpace(bucket.BucketName), index),
+			metadata: gin.H{
+				"bindingIndex":         index,
+				"bindingID":            bucket.ID,
+				"bindingName":          strings.TrimSpace(bucket.BucketName),
+				"providerType":         strings.TrimSpace(bucket.ProviderType),
+				"credentialOperation":  operation,
+				"credentialModeRaw":    strings.TrimSpace(bucket.CredentialOperation),
+				"credentialModeSource": credentialOperationSource(bucket.ID, bucket.CredentialOperation),
+			},
+		})
+	}
+
+	for index, cdn := range req.CDNs {
+		operation := resolveCredentialOperation(cdn.ID, cdn.CredentialOperation)
+		entries = append(entries, bindingCredentialAuditEntry{
+			action:           credentialAuditAction(operation),
+			targetType:       "cdn",
+			targetIdentifier: bindingTargetIdentifier(cdn.ID, strings.TrimSpace(cdn.CDNEndpoint), index),
+			metadata: gin.H{
+				"bindingIndex":         index,
+				"bindingID":            cdn.ID,
+				"bindingName":          strings.TrimSpace(cdn.CDNEndpoint),
+				"providerType":         strings.TrimSpace(cdn.ProviderType),
+				"credentialOperation":  operation,
+				"credentialModeRaw":    strings.TrimSpace(cdn.CredentialOperation),
+				"credentialModeSource": credentialOperationSource(cdn.ID, cdn.CredentialOperation),
+			},
+		})
+	}
+
+	return entries
+}
+
+func buildCDNCredentialAuditEntries(cdns []projectCDNRequest) []bindingCredentialAuditEntry {
+	entries := make([]bindingCredentialAuditEntry, 0, len(cdns))
+	for index, cdn := range cdns {
+		operation := resolveCredentialOperation(cdn.ID, cdn.CredentialOperation)
+		entries = append(entries, bindingCredentialAuditEntry{
+			action:           credentialAuditAction(operation),
+			targetType:       "cdn",
+			targetIdentifier: bindingTargetIdentifier(cdn.ID, strings.TrimSpace(cdn.CDNEndpoint), index),
+			metadata: gin.H{
+				"bindingIndex":         index,
+				"bindingID":            cdn.ID,
+				"bindingName":          strings.TrimSpace(cdn.CDNEndpoint),
+				"providerType":         strings.TrimSpace(cdn.ProviderType),
+				"credentialOperation":  operation,
+				"credentialModeRaw":    strings.TrimSpace(cdn.CredentialOperation),
+				"credentialModeSource": credentialOperationSource(cdn.ID, cdn.CredentialOperation),
+			},
+		})
+	}
+	return entries
+}
+
+func (h *Handler) recordBindingCredentialAudits(ctx *gin.Context, projectID uint64, entries []bindingCredentialAuditEntry, result string, err error) {
+	for _, entry := range entries {
+		details := cloneAuditMetadata(entry.metadata)
+		if result == model.AuditResultFailure && err != nil {
+			for key, value := range failureAuditSummary(err) {
+				details[key] = value
+			}
+		}
+		h.recordAuditWithTarget(ctx, projectID, entry.action, entry.targetType, entry.targetIdentifier, result, details)
+	}
+}
+
+func failureAuditSummary(err error) gin.H {
+	if err == nil {
+		return nil
+	}
+	summary := gin.H{"error": err.Error()}
+	var appErr *httpresp.AppError
+	if errors.As(err, &appErr) {
+		summary["errorCode"] = appErr.Code
+		summary["errorMessage"] = appErr.Message
+	}
+	return summary
+}
+
+func cloneAuditMetadata(metadata gin.H) gin.H {
+	if len(metadata) == 0 {
+		return gin.H{}
+	}
+	cloned := make(gin.H, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func credentialOperationSource(bindingID uint64, raw string) string {
+	if strings.TrimSpace(raw) != "" {
+		return "request"
+	}
+	if bindingID > 0 {
+		return "default_existing_binding"
+	}
+	return "empty"
+}
+
+func resolveCredentialOperation(bindingID uint64, operation string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(operation))
+	if normalized == "" && bindingID > 0 {
+		return credentialOperationKeep
+	}
+	return normalized
+}
+
+func credentialAuditAction(operation string) string {
+	switch operation {
+	case credentialOperationKeep:
+		return "project.binding.credential.keep"
+	case credentialOperationReplace:
+		return "project.binding.credential.replace"
+	default:
+		return "project.binding.credential.unknown"
+	}
+}
+
+func bindingTargetIdentifier(bindingID uint64, bindingName string, index int) string {
+	if bindingID > 0 {
+		return fmt.Sprintf("id:%d", bindingID)
+	}
+	if bindingName != "" {
+		return bindingName
+	}
+	return fmt.Sprintf("index:%d", index)
+}
+
 func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, targetIdentifier, result string, details gin.H) {
+	h.recordAuditWithTarget(ctx, projectID, action, "cdn", targetIdentifier, result, details)
+}
+
+func (h *Handler) recordAuditWithTarget(ctx *gin.Context, projectID uint64, action, targetType, targetIdentifier, result string, details gin.H) {
 	if h.recorder == nil {
 		return
 	}
@@ -592,7 +758,7 @@ func (h *Handler) recordAudit(ctx *gin.Context, projectID uint64, action, target
 		ActorUserID:      actorUserID,
 		ProjectID:        &projectIDValue,
 		Action:           action,
-		TargetType:       "cdn",
+		TargetType:       targetType,
 		TargetIdentifier: targetIdentifier,
 		Result:           result,
 		RequestID:        httpresp.GetRequestID(ctx),

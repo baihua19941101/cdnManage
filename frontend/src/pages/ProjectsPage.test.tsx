@@ -218,4 +218,66 @@ describe('ProjectsPage provider registration errors', () => {
 
     expect(await screen.findByText('存储桶绑定 #1 为新增绑定，必须填写 AK/SK。')).toBeInTheDocument()
   }, 20000)
+
+  it('shows field-level error for credential_not_found_for_keep details', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [],
+          },
+        } as never
+      }
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+
+    const postMock = vi.spyOn(apiClient, 'post').mockRejectedValueOnce(
+      new AxiosError(
+        'bad request',
+        'ERR_BAD_REQUEST',
+        undefined,
+        undefined,
+        {
+          status: 400,
+          statusText: 'Bad Request',
+          headers: {},
+          config: {} as never,
+          data: {
+            code: 'credential_not_found_for_keep',
+            message: 'historical credential was not found for keep operation',
+            details: {
+              bindingType: 'buckets',
+              bindingIndex: 0,
+              bindingPath: 'buckets[0].credentialOperation',
+            },
+          },
+        },
+      ),
+    )
+
+    render(<ProjectsPage />)
+
+    const createButton = await screen.findByText('新建项目')
+    fireEvent.click(createButton.closest('button') as HTMLButtonElement)
+
+    const modal = await screen.findByRole('dialog')
+    fireEvent.change(within(modal).getByLabelText('项目名称'), { target: { value: 'demo project' } })
+    fireEvent.change(within(modal).getByLabelText('项目描述'), { target: { value: 'demo desc' } })
+
+    const addBucketBinding = await within(modal).findByText('添加存储桶绑定')
+    fireEvent.click(addBucketBinding.closest('button') as HTMLButtonElement)
+    fireEvent.change(within(modal).getByLabelText('BucketName'), { target: { value: 'bucket-demo' } })
+    fireEvent.change(within(modal).getByLabelText('Region'), { target: { value: 'cn-hangzhou' } })
+    fireEvent.change(within(modal).getByLabelText('AccessKeyId'), { target: { value: 'AKID_TEST' } })
+    fireEvent.change(within(modal).getByLabelText('AccessKeySecret'), { target: { value: 'AK_SECRET_TEST' } })
+    fireEvent.click(within(modal).getByRole('button', { name: 'OK' }))
+
+    await waitFor(() => {
+      expect(postMock).toHaveBeenCalledTimes(1)
+    })
+
+    expect(await screen.findByText('存储桶绑定 #1 无法保留历史凭据，请切换为“更新凭据”。')).toBeInTheDocument()
+  }, 20000)
 })

@@ -43,6 +43,8 @@
 - **凭据操作模式**: 项目编辑提交时对绑定项凭据的处理意图，包含 `KEEP` 与 `REPLACE`。
 - **KEEP**: 保留绑定项现有凭据，不提交新的 AccessKey 或 SecretKey。
 - **REPLACE**: 使用新提交的 AccessKey 或 SecretKey 替换绑定项现有凭据。
+- **CDN 域名**: 项目绑定的 CDN 访问域名，接口字段名为 `cdnEndpoint`。
+- **PurgeScope 软废弃**: 在绑定配置中不再作为有效输入参数，但在数据模型中暂时保留字段以兼容历史数据读取与平滑迁移。
 
 ## Requirements
 
@@ -228,3 +230,15 @@
 3. WHEN 平台管理员修改已有绑定项的云厂商类型，THE CDN 管理平台 SHALL 要求该绑定项凭据操作模式为 `REPLACE`。
 4. IF 平台管理员修改已有绑定项的云厂商类型且提交凭据操作模式为 `KEEP`，THEN THE CDN 管理平台 SHALL 拒绝保存并返回可定位到具体绑定项的错误信息。
 5. WHEN 平台管理员编辑已有绑定项，THE CDN 管理平台 SHALL 展示脱敏凭据状态并提供可切换的“更新凭据”交互入口。
+
+### Requirement 17
+
+**User Story:** 作为平台管理员，我希望 CDN 绑定配置简化为必要静态信息并将刷新动作参数放在刷新操作中，这样我可以降低配置复杂度并避免语义混淆。
+
+#### Acceptance Criteria
+
+1. WHEN 平台管理员创建或编辑项目 CDN 绑定项，THE CDN 管理平台 SHALL 将 `cdnEndpoint` 作为“CDN 域名”进行展示与维护。
+2. WHEN 平台管理员创建或编辑项目 CDN 绑定项，THE CDN 管理平台 SHALL 将 `region` 作为可选输入字段并在未提供时允许请求通过。
+3. WHEN 已授权用户发起 `refresh-url` 或 `refresh-directory` 操作，THE CDN 管理平台 SHALL 基于操作类型决定刷新语义而不依赖绑定配置中的 `purgeScope`。
+4. WHILE CDN 绑定配置处于软废弃迁移阶段，THE CDN 管理平台 SHALL 继续兼容历史 `purgeScope` 字段读取且不要求新配置请求提供该字段。
+5. WHEN 平台管理员在项目配置页面查看或编辑 CDN 绑定项，THE CDN 管理平台 SHALL 不再要求填写 `purgeScope` 字段。
