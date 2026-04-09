@@ -1262,18 +1262,179 @@ func TestServiceDeleteBucketObjectsKeepsFileStatsAndErrorsStableUnderParallelism
 			require.Equal(t, "provider_operation_failed", result.ErrorCode)
 			require.Contains(t, result.Message, "storage provider operation failed")
 			require.Equal(t, 0, result.DeletedObjects)
+			require.Equal(t, 1, result.FailedObjects)
 		} else {
 			successCount++
 			require.True(t, result.Success)
 			require.Equal(t, "", result.ErrorCode)
 			require.Equal(t, "object deleted", result.Message)
 			require.Equal(t, 1, result.DeletedObjects)
+			require.Equal(t, 0, result.FailedObjects)
 		}
 	}
 	require.Equal(t, 2, successCount)
 	require.Equal(t, 2, failureCount)
 	require.Equal(t, len(keys), providerStub.uniqueDeleteCallCount())
 	require.GreaterOrEqual(t, providerStub.maxConcurrency(), 2)
+}
+
+func TestServiceDeleteBucketObjectsUsesBatchParallelismForMixedKeysAndKeepsResultOrderStable(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	registerTestProviders(t, service)
+	service.ConfigureDeleteParallelism(1)
+	service.ConfigureDeleteFileParallelism(1)
+	service.ConfigureDeleteBatchParallelism(3)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		objects: []provider.ObjectInfo{
+			{Key: "assets/dir-a/a.js", IsDir: false},
+			{Key: "assets/dir-a/b.js", IsDir: false},
+			{Key: "assets/dir-b/c.js", IsDir: false},
+		},
+		deleteErrors: map[string]error{
+			"assets/file-b.js": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"delete_object",
+				provider.ErrCodeOperationFailed,
+				"delete failed",
+				false,
+				nil,
+			),
+			"assets/dir-b/c.js": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"delete_object",
+				provider.ErrCodeOperationFailed,
+				"delete failed",
+				false,
+				nil,
+			),
+		},
+		deleteCalls: make(map[string]int),
+	}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-batch-delete-mixed-parallel-" + suffix,
+		Description: "storage batch delete mixed parallel test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-batch-delete-mixed-parallel-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-batch-delete-mixed-parallel-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	keys := []string{"assets/file-a.js", "assets/dir-a/", "assets/file-b.js", "assets/dir-b/"}
+	results, err := service.DeleteBucketObjects(ctx, project.ID, DeleteBucketObjectsInput{
+		Keys: keys,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, len(keys))
+
+	require.Equal(t, "assets/file-a.js", results[0].Key)
+	require.Equal(t, "file", results[0].TargetType)
+	require.True(t, results[0].Success)
+	require.Equal(t, 1, results[0].DeletedObjects)
+	require.Equal(t, 0, results[0].FailedObjects)
+	require.Equal(t, "object deleted", results[0].Message)
+
+	require.Equal(t, "assets/dir-a/", results[1].Key)
+	require.Equal(t, "directory", results[1].TargetType)
+	require.True(t, results[1].Success)
+	require.Equal(t, 2, results[1].DeletedObjects)
+	require.Equal(t, 0, results[1].FailedObjects)
+	require.Equal(t, "directory deleted", results[1].Message)
+
+	require.Equal(t, "assets/file-b.js", results[2].Key)
+	require.Equal(t, "file", results[2].TargetType)
+	require.False(t, results[2].Success)
+	require.Equal(t, "provider_operation_failed", results[2].ErrorCode)
+	require.Equal(t, 0, results[2].DeletedObjects)
+	require.Equal(t, 1, results[2].FailedObjects)
+	require.Contains(t, results[2].Message, "storage provider operation failed")
+
+	require.Equal(t, "assets/dir-b/", results[3].Key)
+	require.Equal(t, "directory", results[3].TargetType)
+	require.False(t, results[3].Success)
+	require.Equal(t, "provider_operation_failed", results[3].ErrorCode)
+	require.Equal(t, 0, results[3].DeletedObjects)
+	require.Equal(t, 1, results[3].FailedObjects)
+	require.Contains(t, results[3].Message, "directory delete partially failed")
+	require.Contains(t, results[3].Message, "assets/dir-b/c.js:")
+
+	require.Equal(t, 5, providerStub.uniqueDeleteCallCount())
+	require.GreaterOrEqual(t, providerStub.maxConcurrency(), 2)
+}
+
+func TestDeleteSingleFileObjectMapsTimeoutErrorCode(t *testing.T) {
+	service := NewService(nil, nil)
+	service.deleteTimeout = 20 * time.Millisecond
+
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		deleteCalls:          make(map[string]int),
+		waitDeleteForContext: true,
+	}
+
+	deleteCtx, cancel := service.withDeleteProviderTimeout(context.Background())
+	defer cancel()
+
+	result := service.deleteSingleFileObject(deleteCtx, providerStub, provider.DeleteObjectRequest{
+		Bucket: "bucket",
+		Region: "region",
+	}, "assets/timeout.js")
+
+	require.False(t, result.Success)
+	require.Equal(t, "file", result.TargetType)
+	require.Equal(t, "delete_request_timeout", result.ErrorCode)
+	require.Equal(t, "delete request timed out", result.Message)
+	require.Equal(t, 0, result.DeletedObjects)
+	require.Equal(t, 1, result.FailedObjects)
+}
+
+func TestDeleteSingleFileAndDirectoryMapCanceledErrorCode(t *testing.T) {
+	service := NewService(nil, nil)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	fileProvider := &directoryDeleteWorkerPoolProvider{
+		deleteCalls:          make(map[string]int),
+		waitDeleteForContext: true,
+	}
+	fileResult := service.deleteSingleFileObject(canceledCtx, fileProvider, provider.DeleteObjectRequest{
+		Bucket: "bucket",
+		Region: "region",
+	}, "assets/file.js")
+	require.False(t, fileResult.Success)
+	require.Equal(t, "delete_request_canceled", fileResult.ErrorCode)
+	require.Equal(t, "delete request was canceled", fileResult.Message)
+
+	directoryProvider := &directoryDeleteWorkerPoolProvider{
+		waitListForContext: true,
+		deleteCalls:        make(map[string]int),
+	}
+	directoryResult := service.deleteDirectoryRecursively(canceledCtx, directoryProvider, provider.DeleteObjectRequest{
+		Bucket: "bucket",
+		Region: "region",
+		Key:    "assets/",
+	})
+	require.False(t, directoryResult.Success)
+	require.Equal(t, "directory", directoryResult.TargetType)
+	require.Equal(t, "delete_request_canceled", directoryResult.ErrorCode)
+	require.Equal(t, "delete request was canceled", directoryResult.Message)
 }
 
 func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
@@ -1520,6 +1681,27 @@ func TestDeleteDirectoryRecursivelyKeepsFailureSummaryStableUnderConcurrency(t *
 	require.Contains(t, result.Message, "assets/c.js:")
 	require.Less(t, strings.Index(result.Message, "assets/a.js:"), strings.Index(result.Message, "assets/c.js:"))
 	require.Equal(t, 4, providerStub.uniqueDeleteCallCount())
+}
+
+func TestDeleteDirectoryRecursivelyMapsTimeoutErrorCode(t *testing.T) {
+	service := NewService(nil, nil)
+	service.deleteTimeout = 20 * time.Millisecond
+
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		waitListForContext: true,
+		deleteCalls:        make(map[string]int),
+	}
+
+	result := service.deleteDirectoryRecursively(context.Background(), providerStub, provider.DeleteObjectRequest{
+		Bucket: "bucket",
+		Region: "region",
+		Key:    "assets/",
+	})
+
+	require.False(t, result.Success)
+	require.Equal(t, "directory", result.TargetType)
+	require.Equal(t, "delete_request_timeout", result.ErrorCode)
+	require.Equal(t, "delete request timed out", result.Message)
 }
 
 func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
@@ -1783,12 +1965,14 @@ type fakeCDNProvider struct {
 }
 
 type directoryDeleteWorkerPoolProvider struct {
-	objects      []provider.ObjectInfo
-	deleteErrors map[string]error
-	deleteCalls  map[string]int
-	mu           sync.Mutex
-	inFlight     int
-	maxInFlight  int
+	objects              []provider.ObjectInfo
+	deleteErrors         map[string]error
+	deleteCalls          map[string]int
+	waitListForContext   bool
+	waitDeleteForContext bool
+	mu                   sync.Mutex
+	inFlight             int
+	maxInFlight          int
 }
 
 func (p *directoryDeleteWorkerPoolProvider) Type() provider.Type {
@@ -1799,7 +1983,12 @@ func (p *directoryDeleteWorkerPoolProvider) Detect(_ context.Context, _ provider
 	return provider.TypeAliyun, nil
 }
 
-func (p *directoryDeleteWorkerPoolProvider) ListObjects(_ context.Context, req provider.ListObjectsRequest) ([]provider.ObjectInfo, error) {
+func (p *directoryDeleteWorkerPoolProvider) ListObjects(ctx context.Context, req provider.ListObjectsRequest) ([]provider.ObjectInfo, error) {
+	if p.waitListForContext {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
 	filtered := make([]provider.ObjectInfo, 0, len(p.objects))
 	for _, object := range p.objects {
 		if req.Prefix == "" || strings.HasPrefix(object.Key, req.Prefix) {
@@ -1848,7 +2037,12 @@ func (p *directoryDeleteWorkerPoolProvider) DownloadObject(_ context.Context, _ 
 	return nil, provider.ObjectMeta{}, nil
 }
 
-func (p *directoryDeleteWorkerPoolProvider) DeleteObject(_ context.Context, req provider.DeleteObjectRequest) error {
+func (p *directoryDeleteWorkerPoolProvider) DeleteObject(ctx context.Context, req provider.DeleteObjectRequest) error {
+	if p.waitDeleteForContext {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
 	p.mu.Lock()
 	p.inFlight++
 	if p.inFlight > p.maxInFlight {

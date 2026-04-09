@@ -44,6 +44,7 @@ type Handler struct {
 	maxUploadSizeMB    int64
 	maxUploadSizeBytes int64
 	archiveParallelism int
+	fileParallelism    int
 }
 
 type validateConnectionRequest struct {
@@ -190,11 +191,12 @@ type renameObjectResponse struct {
 	Summary renameObjectSummary `json:"summary"`
 }
 
-func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64, archiveParallelism int) *Handler {
+func NewHandler(projectService *serviceprojects.Service, audits repository.AuditLogRepository, maxUploadSizeMB int64, archiveParallelism int, fileParallelism int) *Handler {
 	if maxUploadSizeMB <= 0 {
 		maxUploadSizeMB = config.DefaultMaxUploadFileSizeMB
 	}
 	archiveParallelism = clampArchiveParallelism(archiveParallelism)
+	fileParallelism = clampUploadFileParallelism(fileParallelism)
 
 	return &Handler{
 		projectService:     projectService,
@@ -203,6 +205,7 @@ func NewHandler(projectService *serviceprojects.Service, audits repository.Audit
 		maxUploadSizeMB:    maxUploadSizeMB,
 		maxUploadSizeBytes: (config.UploadConfig{MaxFileSizeMB: maxUploadSizeMB}).MaxFileSizeBytes(),
 		archiveParallelism: archiveParallelism,
+		fileParallelism:    fileParallelism,
 	}
 }
 
@@ -345,6 +348,7 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 	var archiveSummary *uploadArchiveSummary
 	var archiveSessionID string
 	var archiveStartedAt time.Time
+	fileUploadTasks := make([]fileUploadTask, 0, len(fileHeaders))
 	ensureArchiveSession := func() {
 		archiveSummary = ensureArchiveSummary(archiveSummary)
 		if archiveSessionID == "" {
@@ -466,40 +470,17 @@ func (h *Handler) UploadObject(ctx *gin.Context) {
 			continue
 		}
 
-		contentType := fileContentType(fileHeader)
-		uploadErr := h.projectService.UploadBucketObject(ctx.Request.Context(), projectID, serviceprojects.UploadBucketObjectInput{
-			BucketName:  bucketName,
-			Key:         targetKey,
-			ContentType: contentType,
-			Content:     file,
-			Size:        fileHeader.Size,
+		fileUploadTasks = append(fileUploadTasks, fileUploadTask{
+			order:       len(fileUploadTasks),
+			fileName:    fileName,
+			targetKey:   targetKey,
+			contentType: fileContentType(fileHeader),
+			size:        fileHeader.Size,
+			fileHeader:  fileHeader,
 		})
 		_ = file.Close()
-		if uploadErr != nil {
-			appendUploadResult(&results, &summary, uploadObjectItemResult{
-				FileName: fileName,
-				Key:      targetKey,
-				Result:   "failure",
-				Reason:   uploadErr.Error(),
-			})
-			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultFailure, gin.H{
-				"error":    uploadErr.Error(),
-				"size":     fileHeader.Size,
-				"fileName": fileName,
-			})
-			continue
-		}
-
-		appendUploadResult(&results, &summary, uploadObjectItemResult{
-			FileName: fileName,
-			Key:      targetKey,
-			Result:   "success",
-		})
-		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(targetKey, fileName), model.AuditResultSuccess, gin.H{
-			"size":     fileHeader.Size,
-			"fileName": fileName,
-		})
 	}
+	h.uploadFileTasksConcurrently(ctx, ctx.Request.Context(), projectID, bucketName, fileUploadTasks, &results, &summary)
 
 	response := uploadObjectResponse{
 		Message: "upload accepted",
@@ -1083,6 +1064,21 @@ type archiveUploadTaskResult struct {
 	err  error
 }
 
+type fileUploadTask struct {
+	order       int
+	fileName    string
+	targetKey   string
+	contentType string
+	size        int64
+	fileHeader  *multipart.FileHeader
+}
+
+type fileUploadTaskResult struct {
+	task   fileUploadTask
+	err    error
+	reason string
+}
+
 func (h *Handler) uploadArchiveEntries(
 	ctx *gin.Context,
 	projectID uint64,
@@ -1348,6 +1344,112 @@ func (h *Handler) uploadArchiveTasksConcurrently(
 	return stats
 }
 
+func (h *Handler) uploadFileTasksConcurrently(
+	ctx *gin.Context,
+	requestCtx context.Context,
+	projectID uint64,
+	bucketName string,
+	tasks []fileUploadTask,
+	results *[]uploadObjectItemResult,
+	summary *uploadObjectSummary,
+) {
+	if len(tasks) == 0 {
+		return
+	}
+
+	parallelism := h.fileParallelism
+	if parallelism <= 0 {
+		parallelism = config.DefaultUploadFileParallelism
+	}
+	if parallelism > len(tasks) {
+		parallelism = len(tasks)
+	}
+
+	taskCh := make(chan fileUploadTask)
+	resultCh := make(chan fileUploadTaskResult, len(tasks))
+	var wg sync.WaitGroup
+
+	worker := func() {
+		defer wg.Done()
+		for task := range taskCh {
+			file, openErr := task.fileHeader.Open()
+			if openErr != nil {
+				resultCh <- fileUploadTaskResult{
+					task:   task,
+					err:    openErr,
+					reason: "file could not be opened",
+				}
+				continue
+			}
+
+			uploadErr := h.projectService.UploadBucketObject(requestCtx, projectID, serviceprojects.UploadBucketObjectInput{
+				BucketName:  bucketName,
+				Key:         task.targetKey,
+				ContentType: task.contentType,
+				Content:     file,
+				Size:        task.size,
+			})
+			_ = file.Close()
+			resultCh <- fileUploadTaskResult{task: task, err: uploadErr}
+		}
+	}
+
+	wg.Add(parallelism)
+	for i := 0; i < parallelism; i++ {
+		go worker()
+	}
+	for _, task := range tasks {
+		taskCh <- task
+	}
+	close(taskCh)
+	wg.Wait()
+	close(resultCh)
+
+	resultsByOrder := make(map[int]fileUploadTaskResult, len(tasks))
+	for item := range resultCh {
+		resultsByOrder[item.task.order] = item
+	}
+
+	for _, task := range tasks {
+		item, ok := resultsByOrder[task.order]
+		if !ok {
+			continue
+		}
+		if item.err != nil {
+			reason := item.reason
+			if reason == "" {
+				reason = item.err.Error()
+			}
+			appendUploadResult(results, summary, uploadObjectItemResult{
+				FileName: item.task.fileName,
+				Key:      item.task.targetKey,
+				Result:   "failure",
+				Reason:   reason,
+			})
+
+			metadata := gin.H{
+				"error":    item.err.Error(),
+				"fileName": item.task.fileName,
+			}
+			if item.reason == "" {
+				metadata["size"] = item.task.size
+			}
+			h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(item.task.targetKey, item.task.fileName), model.AuditResultFailure, metadata)
+			continue
+		}
+
+		appendUploadResult(results, summary, uploadObjectItemResult{
+			FileName: item.task.fileName,
+			Key:      item.task.targetKey,
+			Result:   "success",
+		})
+		h.recordAudit(ctx, projectID, "object.upload", "object", uploadAuditTarget(item.task.targetKey, item.task.fileName), model.AuditResultSuccess, gin.H{
+			"size":     item.task.size,
+			"fileName": item.task.fileName,
+		})
+	}
+}
+
 func (h *Handler) recordArchiveFailure(
 	ctx *gin.Context,
 	projectID uint64,
@@ -1463,6 +1565,19 @@ func clampArchiveParallelism(value int) int {
 	}
 	if value > config.MaxArchiveParallelism {
 		return config.MaxArchiveParallelism
+	}
+	return value
+}
+
+func clampUploadFileParallelism(value int) int {
+	if value == 0 {
+		return config.DefaultUploadFileParallelism
+	}
+	if value < config.MinUploadFileParallelism {
+		return config.MinUploadFileParallelism
+	}
+	if value > config.MaxUploadFileParallelism {
+		return config.MaxUploadFileParallelism
 	}
 	return value
 }
