@@ -377,3 +377,46 @@
     - 定义后续 migration 计划：删除 `project_cdns.purge_scope` 字段及关联兼容代码
     - 本任务仅新增占位说明，不在当前迭代执行迁移
     - _Requirements: 17.4_
+
+- [ ] 22. 修复目录删除超时取消并实现上传/删除并发配置化（新需求）
+  - [ ] 22.1 扩展后端配置模型，新增上传/删除并发与删除超时配置项
+    - 在 `backend/internal/config/config.go` 增加 `delete` 配置节，至少包含 `parallelism`、`batch_parallelism`、`file_parallelism`、`request_timeout_seconds`、`list_page_size`
+    - 在 `upload` 配置节新增 `file_parallelism`，用于非压缩包文件上传并发
+    - 为新增配置补充默认值与边界钳制，并在 `backend/config.example.yaml` 增加示例项
+    - _Requirements: 1.4, 9.3, 9.4, 12.4, 12.5, 13.1_
+  - [ ] 22.2 修复前端目录删除与批量删除超时取消问题
+    - 为 `/storage/objects` 与 `/storage/objects/batch` 请求覆盖更长超时时间并接入取消控制
+    - 区分超时、主动取消、后端失败三类提示，避免统一报“删除失败”
+    - _Requirements: 12.4, 12.5, 8.4_
+  - [ ] 22.3 实现目录递归删除并发执行与可控限流
+    - 在后端目录递归删除链路引入 worker pool，并使用 `delete.parallelism` 控制并发度
+    - 保持删除结果统计与失败摘要的一致性，避免重复删除与漏删
+    - _Requirements: 12.4, 8.4, 9.4_
+  - [ ] 22.4 实现单文件删除并发能力
+    - 在批量删除链路中对“文件 key”使用 `delete.file_parallelism` 并发执行删除
+    - 保持单文件删除结果与错误码稳定返回，避免并发下统计偏差
+    - _Requirements: 12.5, 8.4, 9.4_
+  - [ ] 22.5 实现批量混合删除并发编排与结果稳定返回
+    - 在批量删除链路使用 `delete.batch_parallelism` 并发处理 key（文件删除与目录递归删除混合场景）
+    - 返回结果需保持可追踪（包含目标类型、成功失败计数、错误摘要）
+    - _Requirements: 12.5, 8.4, 9.4_
+  - [ ] 22.6 实现目录删除请求超时控制与错误映射
+    - 基于 `delete.request_timeout_seconds` 对 Provider 调用链路施加超时上下文
+    - 将超时与取消映射为可识别错误码并透传到前端提示
+    - _Requirements: 12.4, 12.5, 9.4_
+  - [ ] 22.7 扩展上传并发配置到单文件/多文件非压缩上传链路
+    - 使用 `upload.file_parallelism` 在非压缩包上传路径启用并发上传，覆盖单文件与多文件场景
+    - 保持与 `upload.archive_parallelism` 的职责边界，避免统计口径冲突
+    - _Requirements: 1.4, 13.1, 8.4_
+  - [ ] 22.8 修复 Archive Upload Sessions 表格长文本撑宽问题并保持布局稳定
+    - 对“会话 ID”“失败摘要”等长文本列启用省略显示与悬浮提示，限制列宽并启用固定表格布局
+    - 保持表格在长文本场景下不扩展容器宽度，必要时仅在表格区域横向滚动
+    - _Requirements: 7.1, 11.5, 13.4_
+  - [ ] 22.9 调整存储页区块顺序，将 Object List 提升到 Archive Upload Sessions 之上
+    - 在 `StoragePage` 中重排卡片布局：`Upload` -> `Object List` -> `Archive Upload Sessions`
+    - 保持现有查询、会话刷新、明细抽屉等交互能力不回归
+    - _Requirements: 7.1, 12.2, 12.3, 11.5_
+  - [ ]* 22.10 为删除并发、超时取消、上传并发与会话表格布局补充最小化自动化测试
+    - 覆盖目录递归删除超时、主动取消、单文件并发删除、批量混合删除结果一致性、单文件/多文件并发上传统计一致性
+    - 覆盖会话表格长文本不撑宽与区块重排后的核心交互可用性
+    - _Requirements: 1.4, 7.1, 11.5, 12.4, 12.5, 13.1, 8.4, 9.4_
