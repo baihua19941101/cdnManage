@@ -143,11 +143,6 @@ const providerOptions = [
   { label: 'Qiniu', value: 'qiniu' },
 ]
 
-const purgeScopeOptions = [
-  { label: 'URL', value: 'url' },
-  { label: 'Directory', value: 'directory' },
-]
-
 const providerTagColor: Record<string, string> = {
   aliyun: 'blue',
   tencent_cloud: 'cyan',
@@ -1120,20 +1115,9 @@ export function ProjectsPage() {
                               <Form.Item
                                 label="Region"
                                 name={[field.name, 'region']}
-                                rules={[{ required: true, message: '请输入 Region' }]}
-                                extra="阿里云请填写 Region ID（如 cn-beijing）。若有 OSS 外网域名（如 oss-cn-beijing.aliyuncs.com），可提取 cn-beijing。"
+                                extra="可选，默认使用 Provider fallback。阿里云请填写 Region ID（如 cn-beijing）。若有 OSS 外网域名（如 oss-cn-beijing.aliyuncs.com），可提取 cn-beijing。"
                               >
                                 <Input />
-                              </Form.Item>
-                            </Col>
-                            <Col span={6}>
-                              <Form.Item
-                                label="PurgeScope"
-                                name={[field.name, 'purgeScope']}
-                                rules={[{ required: true, message: '请选择 PurgeScope' }]}
-                                initialValue="url"
-                              >
-                                <Select options={purgeScopeOptions} />
                               </Form.Item>
                             </Col>
                           </Row>
