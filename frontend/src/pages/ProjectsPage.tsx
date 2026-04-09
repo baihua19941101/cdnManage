@@ -68,6 +68,7 @@ type ApiResponse<T> = {
   code: string
   message: string
   data: T
+  details?: unknown
 }
 
 type EditProjectBucketInput = {
@@ -132,6 +133,73 @@ const resolveErrorMessage = (error: unknown, fallback: string) => {
     return payload.message
   }
   return fallback
+}
+
+type BindingFieldError = {
+  fieldPath: (string | number)[]
+  fieldMessage: string
+  toastMessage: string
+}
+
+const parseBindingPath = (rawPath: string): (string | number)[] | null => {
+  const normalized = rawPath.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const match = normalized.match(/^(buckets|cdns)\[(\d+)\]\.([A-Za-z0-9_]+)$/)
+  if (!match) {
+    return null
+  }
+
+  const index = Number(match[2])
+  if (!Number.isFinite(index) || index < 0) {
+    return null
+  }
+
+  return [match[1], index, match[3]]
+}
+
+const resolveProviderRegistrationFieldError = (error: unknown): BindingFieldError | null => {
+  if (!axios.isAxiosError(error)) {
+    return null
+  }
+
+  const payload = error.response?.data
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+
+  const code = (payload as Record<string, unknown>).code
+  if (code !== 'provider_not_registered') {
+    return null
+  }
+
+  const details = (payload as Record<string, unknown>).details
+  if (!details || typeof details !== 'object') {
+    return null
+  }
+
+  const detailsRecord = details as Record<string, unknown>
+  const bindingType = detailsRecord.bindingType === 'cdns' ? 'cdns' : 'buckets'
+  const bindingIndex =
+    typeof detailsRecord.bindingIndex === 'number' && detailsRecord.bindingIndex >= 0
+      ? Math.floor(detailsRecord.bindingIndex)
+      : 0
+  const providerType =
+    typeof detailsRecord.providerType === 'string' && detailsRecord.providerType.trim()
+      ? detailsRecord.providerType.trim()
+      : 'unknown'
+  const bindingPathText =
+    typeof detailsRecord.bindingPath === 'string' ? detailsRecord.bindingPath : ''
+  const parsedPath = parseBindingPath(bindingPathText) ?? [bindingType, bindingIndex, 'providerType']
+
+  const bindingLabel = bindingType === 'cdns' ? 'CDN 绑定' : '存储桶绑定'
+  return {
+    fieldPath: parsedPath,
+    fieldMessage: `${bindingLabel} #${bindingIndex + 1} 的 Provider（${providerType}）未在当前服务实例注册。`,
+    toastMessage: `${bindingLabel} #${bindingIndex + 1} Provider 未注册，请检查后端 Provider 注册配置后重试。`,
+  }
 }
 
 export function ProjectsPage() {
@@ -296,6 +364,18 @@ export function ProjectsPage() {
         await fetchProjectDetail(selectedProjectId)
       }
     } catch (error) {
+      const bindingError = resolveProviderRegistrationFieldError(error)
+      if (bindingError) {
+        form.setFields([
+          {
+            name: bindingError.fieldPath,
+            errors: [bindingError.fieldMessage],
+          },
+        ])
+        messageApi.error(bindingError.toastMessage)
+        return
+      }
+
       messageApi.error(
         resolveErrorMessage(
           error,
@@ -611,6 +691,7 @@ export function ProjectsPage() {
                           label="Region"
                           name={[field.name, 'region']}
                           rules={[{ required: true, message: '请输入 Region' }]}
+                          extra="阿里云请填写 Region ID（如 cn-beijing）。可从 OSS 外网域名提取，例如 oss-cn-beijing.aliyuncs.com 对应 cn-beijing。"
                         >
                           <Input />
                         </Form.Item>
@@ -729,6 +810,7 @@ export function ProjectsPage() {
                           label="Region"
                           name={[field.name, 'region']}
                           rules={[{ required: true, message: '请输入 Region' }]}
+                          extra="阿里云请填写 Region ID（如 cn-beijing）。若有 OSS 外网域名（如 oss-cn-beijing.aliyuncs.com），可提取 cn-beijing。"
                         >
                           <Input />
                         </Form.Item>
