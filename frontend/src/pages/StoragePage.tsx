@@ -32,6 +32,10 @@ import { useEffect, useRef, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
+import {
+  listStorageAuditLogs,
+  type StorageAuditLog,
+} from '../services/storage/uploadSessions'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
 
 type ObjectItem = {
@@ -41,19 +45,6 @@ type ObjectItem = {
   size: number
   lastModified?: string
   isDir: boolean
-}
-
-type StorageAuditLog = {
-  id: number
-  actorUserId: number
-  actorUsername?: string
-  action: string
-  targetType: string
-  targetIdentifier: string
-  result: string
-  requestId: string
-  createdAt: string
-  metadata?: Record<string, unknown>
 }
 
 type ApiResponse<T> = {
@@ -169,6 +160,8 @@ type UploadSessionSummary = {
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 const UPLOAD_STAGE_A_TIMEOUT_MS = 10 * 60 * 1000
+const UPLOAD_STAGE_B_POLL_INTERVAL_MS = 1200
+const UPLOAD_STAGE_B_POLL_TIMEOUT_MS = 2 * 60 * 1000
 const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 const MIN_OBJECT_FETCH_LIMIT = 200
 const OBJECT_FETCH_LIMIT_MULTIPLIER = 10
@@ -616,6 +609,24 @@ const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
 const formatArchiveSummary = (summary: ArchiveSummary): string =>
   `解压与上传摘要：压缩包 ${summary.archivesProcessed}，解压 ${summary.extracted}，上传 ${summary.uploaded}，跳过 ${summary.skipped}，失败 ${summary.failed}`
 
+const parseUploadSessionId = (data: unknown): string => {
+  if (!isRecord(data)) {
+    return ''
+  }
+  return normalizeString(data.sessionId)
+}
+
+const isSessionSummaryTerminal = (summary: UploadSessionSummary): boolean => {
+  const result = normalizeString(summary.result)
+  if (result === 'success' || result === 'failure') {
+    return true
+  }
+  if (normalizeString(summary.finishedAt)) {
+    return true
+  }
+  return summary.totalEntries > 0 && summary.processedEntries >= summary.totalEntries
+}
+
 const formatUploadLimitText = (bytes: number): string => {
   const mb = bytes / (1024 * 1024)
   const mbText = Number.isInteger(mb) ? String(mb) : mb.toFixed(2).replace(/\.?0+$/, '')
@@ -707,6 +718,10 @@ export function StoragePage() {
   const [uploadStageAProgress, setUploadStageAProgress] = useState(0)
   const [uploadStageAActive, setUploadStageAActive] = useState(false)
   const uploadAbortControllerRef = useRef<AbortController | null>(null)
+  const [uploadStageBActive, setUploadStageBActive] = useState(false)
+  const [uploadStageBSessionID, setUploadStageBSessionID] = useState('')
+  const [uploadStageBSummary, setUploadStageBSummary] = useState<UploadSessionSummary | null>(null)
+  const [uploadStageBFailureSummary, setUploadStageBFailureSummary] = useState('')
 
   const [renameVisible, setRenameVisible] = useState(false)
   const [renamingSourceKey, setRenamingSourceKey] = useState('')
@@ -945,6 +960,10 @@ export function StoragePage() {
     uploadAbortControllerRef.current = abortController
     setUploadStageAProgress(0)
     setUploadStageAActive(true)
+    setUploadStageBSessionID('')
+    setUploadStageBSummary(null)
+    setUploadStageBFailureSummary('')
+    setUploadStageBActive(false)
     setSubmitting(true)
     try {
       const response = await apiClient.post<ApiResponse<unknown>>(
@@ -969,17 +988,41 @@ export function StoragePage() {
       const summary = parseUploadSummary(response.data?.data, uploadableFiles.length)
       const archiveSummary = parseArchiveSummary(response.data?.data)
       const failureReasonSummary = parseFailureReasonSummary(response.data?.data)
+      const sessionID = parseUploadSessionId(response.data?.data)
       const archiveSummaryText = archiveSummary ? `；${formatArchiveSummary(archiveSummary)}` : ''
-      const failureReasonText = failureReasonSummary ? ` 失败原因摘要：${failureReasonSummary}。` : ''
-      if (summary.failureCount > 0) {
-        messageApi.warning(
-          `上传完成：成功 ${summary.successCount}，失败 ${summary.failureCount}${archiveSummaryText}。${failureReasonText}`,
-        )
-      } else {
-        messageApi.success(`上传完成：成功 ${summary.successCount}，失败 0${archiveSummaryText}。`)
+      let finalSuccessCount = summary.successCount
+      let finalFailureCount = summary.failureCount
+      let mergedFailureSummary = failureReasonSummary
+
+      if (sessionID) {
+        const finalSummary = await pollUploadSessionStageB(projectID, sessionID)
+        if (finalSummary) {
+          finalSuccessCount = finalSummary.successEntries
+          finalFailureCount = finalSummary.failedEntries
+        }
+        if (finalFailureCount > 0) {
+          try {
+            const sessionFailureSummary = await loadFailureSummaryForSession(projectID, sessionID)
+            if (sessionFailureSummary) {
+              mergedFailureSummary = sessionFailureSummary
+              setUploadStageBFailureSummary(sessionFailureSummary)
+            }
+          } catch {
+            // ignore session failure summary fetch errors on upload success path
+          }
+        }
       }
 
-      if (archiveSummary && summary.successCount > 0) {
+      const mergedFailureReasonText = mergedFailureSummary
+        ? ` 失败原因摘要：${mergedFailureSummary}。`
+        : ''
+      if (finalFailureCount > 0) {
+        messageApi.warning(`上传完成：成功 ${finalSuccessCount}，失败 ${finalFailureCount}${archiveSummaryText}。${mergedFailureReasonText}`)
+      } else {
+        messageApi.success(`上传完成：成功 ${finalSuccessCount}，失败 0${archiveSummaryText}。`)
+      }
+
+      if (archiveSummary && finalSuccessCount > 0) {
         const currentPrefix = queryForm.getFieldValue('prefix')
         if (typeof currentPrefix === 'string' && currentPrefix.trim()) {
           queryForm.setFieldValue('prefix', '')
@@ -1266,13 +1309,8 @@ export function StoragePage() {
     setAuditVisible(true)
     setAuditLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
-        `/projects/${projectID}/storage/audits`,
-        {
-          params: { path, limit: 20, offset: 0 },
-        },
-      )
-      setAuditLogs(response.data.data?.logs ?? [])
+      const logs = await listStorageAuditLogs(projectID, { path, limit: 20, offset: 0 })
+      setAuditLogs(logs)
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '审计日志查询失败。'))
       setAuditLogs([])
@@ -1285,20 +1323,74 @@ export function StoragePage() {
     projectID: number,
     sessionID: string,
   ): Promise<string> => {
-    const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
-      `/projects/${projectID}/storage/audits`,
-      {
-        params: {
-          action: 'object.upload',
-          sessionId: sessionID,
-          result: 'failure',
-          limit: 5,
-          offset: 0,
-        },
-      },
-    )
-    const logs = response.data.data?.logs ?? []
+    const logs = await listStorageAuditLogs(projectID, {
+      action: 'object.upload',
+      sessionId: sessionID,
+      result: 'failure',
+      limit: 5,
+      offset: 0,
+    })
     return buildFailureSummaryFromAuditLogs(logs)
+  }
+
+  const loadUploadSessionSummaryByID = async (
+    projectID: number,
+    sessionID: string,
+  ): Promise<UploadSessionSummary | null> => {
+    const logs = await listStorageAuditLogs(projectID, {
+      action: 'object.upload_archive',
+      sessionId: sessionID,
+      limit: 1,
+      offset: 0,
+    })
+    const log = logs[0]
+    if (!log) {
+      return null
+    }
+    return parseArchiveSessionSummary(log)
+  }
+
+  const pollUploadSessionStageB = async (
+    projectID: number,
+    sessionID: string,
+  ): Promise<UploadSessionSummary | null> => {
+    const deadline = Date.now() + UPLOAD_STAGE_B_POLL_TIMEOUT_MS
+    let latestSummary: UploadSessionSummary | null = null
+
+    setUploadStageBSessionID(sessionID)
+    setUploadStageBActive(true)
+    setUploadStageBSummary(null)
+    setUploadStageBFailureSummary('')
+
+    try {
+      while (Date.now() <= deadline) {
+        const summary = await loadUploadSessionSummaryByID(projectID, sessionID)
+        if (summary) {
+          latestSummary = summary
+          setUploadStageBSummary(summary)
+          if (summary.failedEntries > 0) {
+            try {
+              const failureSummary = await loadFailureSummaryForSession(projectID, sessionID)
+              setUploadStageBFailureSummary(failureSummary)
+            } catch {
+              setUploadStageBFailureSummary('')
+            }
+          } else {
+            setUploadStageBFailureSummary('')
+          }
+          if (isSessionSummaryTerminal(summary)) {
+            return summary
+          }
+        }
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, UPLOAD_STAGE_B_POLL_INTERVAL_MS)
+        })
+      }
+    } finally {
+      setUploadStageBActive(false)
+    }
+
+    return latestSummary
   }
 
   const loadUploadSessionSummaries = async (projectIDInput?: number) => {
@@ -1311,17 +1403,11 @@ export function StoragePage() {
 
     setSessionSummariesLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
-        `/projects/${projectID}/storage/audits`,
-        {
-          params: {
-            action: 'object.upload_archive',
-            limit: 20,
-            offset: 0,
-          },
-        },
-      )
-      const logs = response.data.data?.logs ?? []
+      const logs = await listStorageAuditLogs(projectID, {
+        action: 'object.upload_archive',
+        limit: 20,
+        offset: 0,
+      })
       const seenSessionIDs = new Set<string>()
       const summaries: UploadSessionSummary[] = []
 
@@ -1378,18 +1464,12 @@ export function StoragePage() {
     setSessionDetailVisible(true)
     setSessionDetailLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<{ logs: StorageAuditLog[] }>>(
-        `/projects/${projectID}/storage/audits`,
-        {
-          params: {
-            action: 'object.upload',
-            sessionId: sessionSummary.sessionId,
-            limit: 200,
-            offset: 0,
-          },
-        },
-      )
-      const logs = response.data.data?.logs ?? []
+      const logs = await listStorageAuditLogs(projectID, {
+        action: 'object.upload',
+        sessionId: sessionSummary.sessionId,
+        limit: 200,
+        offset: 0,
+      })
       setSessionDetailLogs(logs)
       if (sessionSummary.failedEntries > 0) {
         const failureSummary = buildFailureSummaryFromAuditLogs(
@@ -1639,6 +1719,10 @@ export function StoragePage() {
                   setSelectedObjectKeys([])
                   setActiveSession(null)
                   setSessionDetailLogs([])
+                  setUploadStageBSessionID('')
+                  setUploadStageBSummary(null)
+                  setUploadStageBFailureSummary('')
+                  setUploadStageBActive(false)
                 }}
               />
             </Form.Item>
@@ -1667,6 +1751,10 @@ export function StoragePage() {
                   setCurrentPrefix('')
                   setObjects([])
                   setSelectedObjectKeys([])
+                  setUploadStageBSessionID('')
+                  setUploadStageBSummary(null)
+                  setUploadStageBFailureSummary('')
+                  setUploadStageBActive(false)
                 }}
               />
             </Form.Item>
@@ -1757,6 +1845,42 @@ export function StoragePage() {
                   data-testid="upload-stage-a-progress"
                 />
               </Space>
+            ) : null}
+            {uploadStageBActive || uploadStageBSummary ? (
+              <Card size="small" title="上传阶段 B（后端处理）">
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">
+                    会话 ID：{uploadStageBSessionID || uploadStageBSummary?.sessionId || '-'}
+                  </Typography.Text>
+                  <Progress
+                    percent={uploadStageBSummary?.progressPercent ?? 0}
+                    status={uploadStageBActive ? 'active' : undefined}
+                    size="small"
+                    data-testid="upload-stage-b-progress"
+                  />
+                  <Typography.Text>
+                    处理进度：{uploadStageBSummary?.processedEntries ?? 0}/
+                    {uploadStageBSummary?.totalEntries || uploadStageBSummary?.processedEntries || 0}
+                  </Typography.Text>
+                  <Typography.Text>
+                    开始：{formatDateTimeText(uploadStageBSummary?.startedAt || '')}，结束：
+                    {formatDateTimeText(uploadStageBSummary?.finishedAt || '')}，耗时：
+                    {formatDurationText(uploadStageBSummary?.durationMs ?? 0)}
+                  </Typography.Text>
+                  <Typography.Text>
+                    成功：{uploadStageBSummary?.successEntries ?? 0}，失败：
+                    {uploadStageBSummary?.failedEntries ?? 0}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    失败摘要：{uploadStageBFailureSummary || '当前会话无失败摘要。'}
+                  </Typography.Text>
+                  {uploadStageBSummary ? (
+                    <Button size="small" onClick={() => void openSessionDetail(uploadStageBSummary)}>
+                      查看会话明细
+                    </Button>
+                  ) : null}
+                </Space>
+              </Card>
             ) : null}
             <Input
               placeholder="可选：单文件时为对象 Key，多文件时作为 keyPrefix"
