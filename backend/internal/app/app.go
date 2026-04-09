@@ -81,6 +81,7 @@ func New() (*Application, error) {
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
 	projectService.ConfigureDeleteParallelism(cfg.Delete.Parallelism)
+	projectService.ConfigureDeleteFileParallelism(cfg.Delete.FileParallelism)
 	if err := projectService.RegisterObjectStorageProvider(provider.NewAliyunOSSProvider()); err != nil {
 		return nil, fmt.Errorf("register aliyun oss provider: %w", err)
 	}

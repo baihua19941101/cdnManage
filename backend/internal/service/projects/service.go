@@ -28,6 +28,7 @@ type Service struct {
 	syncTaskCache     SyncTaskStatusCache
 	syncTaskTTL       time.Duration
 	deleteParallelism int
+	fileDeleteWorkers int
 }
 
 const (
@@ -170,6 +171,7 @@ func NewService(projects repository.ProjectRepository, tx repository.TxManager, 
 		providers:         provider.NewRegistry(),
 		syncTaskTTL:       10 * time.Minute,
 		deleteParallelism: config.DefaultDeleteParallelism,
+		fileDeleteWorkers: config.DefaultDeleteFileParallelism,
 	}
 }
 
@@ -199,6 +201,19 @@ func (s *Service) ConfigureDeleteParallelism(parallelism int) {
 		parallelism = config.MaxDeleteParallelism
 	}
 	s.deleteParallelism = parallelism
+}
+
+func (s *Service) ConfigureDeleteFileParallelism(parallelism int) {
+	if parallelism <= 0 {
+		parallelism = config.DefaultDeleteFileParallelism
+	}
+	if parallelism < config.MinDeleteFileParallelism {
+		parallelism = config.MinDeleteFileParallelism
+	}
+	if parallelism > config.MaxDeleteFileParallelism {
+		parallelism = config.MaxDeleteFileParallelism
+	}
+	s.fileDeleteWorkers = parallelism
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
@@ -615,58 +630,118 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 		return nil, httpresp.NewAppError(400, "validation_error", "at least one object key is required", nil)
 	}
 
-	results := make([]DeleteBucketObjectResult, 0, len(keys))
-	for _, key := range keys {
+	baseDeleteRequest := provider.DeleteObjectRequest{
+		Bucket:     bucket.BucketName,
+		Region:     bucket.Region,
+		Credential: credentialPayload,
+	}
+	results := make([]DeleteBucketObjectResult, len(keys))
+	fileDeleteJobs := make([]deleteFileJob, 0, len(keys))
+	for idx, key := range keys {
 		if strings.HasSuffix(key, "/") {
-			result := s.deleteDirectoryRecursively(ctx, storageProvider, provider.DeleteObjectRequest{
-				Bucket:     bucket.BucketName,
-				Region:     bucket.Region,
-				Key:        key,
-				Credential: credentialPayload,
-			})
-			if result.Key == "" {
-				result.Key = key
-			}
-			if result.TargetType == "" {
-				result.TargetType = "directory"
-			}
-			results = append(results, result)
 			continue
 		}
-
-		deleteErr := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+		fileDeleteJobs = append(fileDeleteJobs, deleteFileJob{index: idx, key: key})
+	}
+	if len(fileDeleteJobs) > 0 {
+		fileDeleteResults := s.deleteFileObjectsConcurrently(ctx, storageProvider, baseDeleteRequest, fileDeleteJobs)
+		for idx, result := range fileDeleteResults {
+			results[idx] = result
+		}
+	}
+	for idx, key := range keys {
+		if !strings.HasSuffix(key, "/") {
+			continue
+		}
+		result := s.deleteDirectoryRecursively(ctx, storageProvider, provider.DeleteObjectRequest{
 			Bucket:     bucket.BucketName,
 			Region:     bucket.Region,
 			Key:        key,
 			Credential: credentialPayload,
 		})
-		if deleteErr != nil {
-			mappedErr := mapObjectStorageOperationError(deleteErr, "delete")
-			result := DeleteBucketObjectResult{
-				Key:        key,
-				TargetType: "file",
-				Success:    false,
-				ErrorCode:  "provider_operation_failed",
-				Message:    mappedErr.Error(),
-			}
-			appErr := &httpresp.AppError{}
-			if errors.As(mappedErr, &appErr) {
-				result.ErrorCode = appErr.Code
-			}
-			results = append(results, result)
-			continue
+		if result.Key == "" {
+			result.Key = key
 		}
+		if result.TargetType == "" {
+			result.TargetType = "directory"
+		}
+		results[idx] = result
+	}
+	return results, nil
+}
 
-		results = append(results, DeleteBucketObjectResult{
-			Key:            key,
-			TargetType:     "file",
-			Success:        true,
-			DeletedObjects: 1,
-			Message:        "object deleted",
-		})
+type deleteFileJob struct {
+	index int
+	key   string
+}
+
+func (s *Service) deleteFileObjectsConcurrently(
+	ctx context.Context,
+	storageProvider provider.ObjectStorageProvider,
+	baseRequest provider.DeleteObjectRequest,
+	jobs []deleteFileJob,
+) map[int]DeleteBucketObjectResult {
+	resultByIndex := make(map[int]DeleteBucketObjectResult, len(jobs))
+	parallelism := s.fileDeleteWorkers
+	if parallelism <= 0 {
+		parallelism = config.DefaultDeleteFileParallelism
+	}
+	if parallelism > len(jobs) {
+		parallelism = len(jobs)
 	}
 
-	return results, nil
+	jobCh := make(chan deleteFileJob, len(jobs))
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
+
+	worker := func() {
+		defer wg.Done()
+		for job := range jobCh {
+			deleteErr := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+				Bucket:     baseRequest.Bucket,
+				Region:     baseRequest.Region,
+				Key:        job.key,
+				Credential: baseRequest.Credential,
+			})
+
+			result := DeleteBucketObjectResult{
+				Key:        job.key,
+				TargetType: "file",
+				Success:    true,
+				Message:    "object deleted",
+			}
+			if deleteErr != nil {
+				mappedErr := mapObjectStorageOperationError(deleteErr, "delete")
+				result.Success = false
+				result.ErrorCode = "provider_operation_failed"
+				result.Message = mappedErr.Error()
+				appErr := &httpresp.AppError{}
+				if errors.As(mappedErr, &appErr) {
+					result.ErrorCode = appErr.Code
+				}
+			} else {
+				result.DeletedObjects = 1
+			}
+
+			mu.Lock()
+			resultByIndex[job.index] = result
+			mu.Unlock()
+		}
+	}
+
+	wg.Add(parallelism)
+	for i := 0; i < parallelism; i++ {
+		go worker()
+	}
+	for _, job := range jobs {
+		jobCh <- job
+	}
+	close(jobCh)
+	wg.Wait()
+
+	return resultByIndex
 }
 
 func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, input RenameBucketObjectInput) (RenameBucketObjectResult, error) {
