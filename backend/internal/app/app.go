@@ -81,7 +81,9 @@ func New() (*Application, error) {
 		secure.NewCredentialCipher(cfg.Encryption.Key),
 	)
 	projectService.ConfigureDeleteParallelism(cfg.Delete.Parallelism)
+	projectService.ConfigureDeleteBatchParallelism(cfg.Delete.BatchParallelism)
 	projectService.ConfigureDeleteFileParallelism(cfg.Delete.FileParallelism)
+	projectService.ConfigureDeleteRequestTimeoutSeconds(cfg.Delete.RequestTimeoutSeconds)
 	if err := projectService.RegisterObjectStorageProvider(provider.NewAliyunOSSProvider()); err != nil {
 		return nil, fmt.Errorf("register aliyun oss provider: %w", err)
 	}
@@ -96,7 +98,7 @@ func New() (*Application, error) {
 	}
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
-	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs(), cfg.Upload.MaxFileSizeMB, cfg.Upload.ArchiveParallelism)
+	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs(), cfg.Upload.MaxFileSizeMB, cfg.Upload.ArchiveParallelism, cfg.Upload.FileParallelism)
 	auditHandler := audithandler.NewHandler(store.AuditLogs())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)

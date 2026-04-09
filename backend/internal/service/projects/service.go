@@ -28,7 +28,9 @@ type Service struct {
 	syncTaskCache     SyncTaskStatusCache
 	syncTaskTTL       time.Duration
 	deleteParallelism int
+	batchDeleteWorker int
 	fileDeleteWorkers int
+	deleteTimeout     time.Duration
 }
 
 const (
@@ -171,7 +173,9 @@ func NewService(projects repository.ProjectRepository, tx repository.TxManager, 
 		providers:         provider.NewRegistry(),
 		syncTaskTTL:       10 * time.Minute,
 		deleteParallelism: config.DefaultDeleteParallelism,
+		batchDeleteWorker: config.DefaultDeleteBatchParallelism,
 		fileDeleteWorkers: config.DefaultDeleteFileParallelism,
+		deleteTimeout:     time.Duration(config.DefaultDeleteRequestTimeoutSec) * time.Second,
 	}
 }
 
@@ -214,6 +218,32 @@ func (s *Service) ConfigureDeleteFileParallelism(parallelism int) {
 		parallelism = config.MaxDeleteFileParallelism
 	}
 	s.fileDeleteWorkers = parallelism
+}
+
+func (s *Service) ConfigureDeleteBatchParallelism(parallelism int) {
+	if parallelism <= 0 {
+		parallelism = config.DefaultDeleteBatchParallelism
+	}
+	if parallelism < config.MinDeleteBatchParallelism {
+		parallelism = config.MinDeleteBatchParallelism
+	}
+	if parallelism > config.MaxDeleteBatchParallelism {
+		parallelism = config.MaxDeleteBatchParallelism
+	}
+	s.batchDeleteWorker = parallelism
+}
+
+func (s *Service) ConfigureDeleteRequestTimeoutSeconds(timeoutSeconds int) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = config.DefaultDeleteRequestTimeoutSec
+	}
+	if timeoutSeconds < config.MinDeleteRequestTimeoutSec {
+		timeoutSeconds = config.MinDeleteRequestTimeoutSec
+	}
+	if timeoutSeconds > config.MaxDeleteRequestTimeoutSec {
+		timeoutSeconds = config.MaxDeleteRequestTimeoutSec
+	}
+	s.deleteTimeout = time.Duration(timeoutSeconds) * time.Second
 }
 
 func (s *Service) List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error) {
@@ -445,13 +475,15 @@ func (s *Service) DeleteBucketObjectWithResult(ctx context.Context, projectID ui
 		}), nil
 	}
 
-	if err := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+	deleteCtx, cancel := s.withDeleteProviderTimeout(ctx)
+	defer cancel()
+	if err := storageProvider.DeleteObject(deleteCtx, provider.DeleteObjectRequest{
 		Bucket:     bucket.BucketName,
 		Region:     bucket.Region,
 		Key:        key,
 		Credential: credentialPayload,
 	}); err != nil {
-		return DeleteBucketObjectResult{}, mapObjectStorageOperationError(err, "delete")
+		return DeleteBucketObjectResult{}, mapObjectStorageDeleteError(err, "delete")
 	}
 	return DeleteBucketObjectResult{
 		Key:            key,
@@ -463,6 +495,9 @@ func (s *Service) DeleteBucketObjectWithResult(ctx context.Context, projectID ui
 }
 
 func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvider provider.ObjectStorageProvider, request provider.DeleteObjectRequest) DeleteBucketObjectResult {
+	deleteCtx, cancel := s.withDeleteProviderTimeout(ctx)
+	defer cancel()
+
 	prefix := strings.TrimSpace(request.Key)
 	result := DeleteBucketObjectResult{
 		Key:        prefix,
@@ -490,7 +525,7 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 
 		marker := ""
 		for {
-			objects, err := storageProvider.ListObjects(ctx, provider.ListObjectsRequest{
+			objects, err := storageProvider.ListObjects(deleteCtx, provider.ListObjectsRequest{
 				Bucket:     request.Bucket,
 				Region:     request.Region,
 				Prefix:     currentPrefix,
@@ -499,9 +534,10 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 				Credential: request.Credential,
 			})
 			if err != nil {
+				appErr := mapObjectStorageDeleteError(err, "list")
 				result.Success = false
-				result.ErrorCode = "provider_operation_failed"
-				result.Message = mapObjectStorageListError(err).Error()
+				result.ErrorCode = appErr.Code
+				result.Message = appErr.Message
 				return result
 			}
 			if len(objects) == 0 {
@@ -555,13 +591,14 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 		deletedObjects   int
 		failedObjects    int
 		failureReasonsBy = make(map[string]string, 4)
+		failureCodeBy    = make(map[string]string, 4)
 	)
 	jobs := make(chan string, len(objectsToDelete))
 
 	worker := func() {
 		defer wg.Done()
 		for key := range jobs {
-			err := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+			err := storageProvider.DeleteObject(deleteCtx, provider.DeleteObjectRequest{
 				Bucket:     request.Bucket,
 				Region:     request.Region,
 				Key:        key,
@@ -572,7 +609,9 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 			if err != nil {
 				failedObjects++
 				if _, exists := failureReasonsBy[key]; !exists {
-					failureReasonsBy[key] = mapObjectStorageOperationError(err, "delete").Error()
+					appErr := mapObjectStorageDeleteError(err, "delete")
+					failureReasonsBy[key] = appErr.Message
+					failureCodeBy[key] = appErr.Code
 				}
 			} else {
 				deletedObjects++
@@ -595,12 +634,22 @@ func (s *Service) deleteDirectoryRecursively(ctx context.Context, storageProvide
 	result.FailedObjects = failedObjects
 	if failedObjects > 0 {
 		result.Success = false
-		result.ErrorCode = "provider_operation_failed"
 		keys := make([]string, 0, len(failureReasonsBy))
 		for key := range failureReasonsBy {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
+		result.ErrorCode = "provider_operation_failed"
+		for _, key := range keys {
+			code := strings.TrimSpace(failureCodeBy[key])
+			if code == "delete_request_canceled" {
+				result.ErrorCode = code
+				break
+			}
+			if code == "delete_request_timeout" {
+				result.ErrorCode = code
+			}
+		}
 		failureReasons := make([]string, 0, 3)
 		for _, key := range keys {
 			failureReasons = append(failureReasons, key+": "+failureReasonsBy[key])
@@ -630,43 +679,108 @@ func (s *Service) DeleteBucketObjects(ctx context.Context, projectID uint64, inp
 		return nil, httpresp.NewAppError(400, "validation_error", "at least one object key is required", nil)
 	}
 
+	deleteCtx, cancel := s.withDeleteProviderTimeout(ctx)
+	defer cancel()
+
 	baseDeleteRequest := provider.DeleteObjectRequest{
 		Bucket:     bucket.BucketName,
 		Region:     bucket.Region,
 		Credential: credentialPayload,
 	}
 	results := make([]DeleteBucketObjectResult, len(keys))
-	fileDeleteJobs := make([]deleteFileJob, 0, len(keys))
-	for idx, key := range keys {
-		if strings.HasSuffix(key, "/") {
-			continue
-		}
-		fileDeleteJobs = append(fileDeleteJobs, deleteFileJob{index: idx, key: key})
+
+	batchParallelism := s.batchDeleteWorker
+	if batchParallelism <= 0 {
+		batchParallelism = config.DefaultDeleteBatchParallelism
 	}
-	if len(fileDeleteJobs) > 0 {
-		fileDeleteResults := s.deleteFileObjectsConcurrently(ctx, storageProvider, baseDeleteRequest, fileDeleteJobs)
-		for idx, result := range fileDeleteResults {
-			results[idx] = result
-		}
+	if batchParallelism > len(keys) {
+		batchParallelism = len(keys)
 	}
-	for idx, key := range keys {
+
+	fileJobCount := 0
+	for _, key := range keys {
 		if !strings.HasSuffix(key, "/") {
-			continue
+			fileJobCount++
 		}
-		result := s.deleteDirectoryRecursively(ctx, storageProvider, provider.DeleteObjectRequest{
-			Bucket:     bucket.BucketName,
-			Region:     bucket.Region,
-			Key:        key,
-			Credential: credentialPayload,
-		})
-		if result.Key == "" {
-			result.Key = key
-		}
-		if result.TargetType == "" {
-			result.TargetType = "directory"
-		}
-		results[idx] = result
 	}
+
+	type fileDeleteTask struct {
+		key    string
+		result chan DeleteBucketObjectResult
+	}
+	fileTaskCh := make(chan fileDeleteTask, fileJobCount)
+	var fileWG sync.WaitGroup
+	if fileJobCount > 0 {
+		fileWorkerCount := s.fileDeleteWorkers
+		if fileWorkerCount <= 0 {
+			fileWorkerCount = config.DefaultDeleteFileParallelism
+		}
+		if fileWorkerCount > fileJobCount {
+			fileWorkerCount = fileJobCount
+		}
+		fileWG.Add(fileWorkerCount)
+		for i := 0; i < fileWorkerCount; i++ {
+			go func() {
+				defer fileWG.Done()
+				for task := range fileTaskCh {
+					task.result <- s.deleteSingleFileObject(deleteCtx, storageProvider, baseDeleteRequest, task.key)
+				}
+			}()
+		}
+	}
+
+	type batchDeleteJob struct {
+		index int
+		key   string
+	}
+	jobCh := make(chan batchDeleteJob, len(keys))
+	var batchWG sync.WaitGroup
+
+	worker := func() {
+		defer batchWG.Done()
+		for job := range jobCh {
+			key := job.key
+			var result DeleteBucketObjectResult
+			if strings.HasSuffix(key, "/") {
+				result = s.deleteDirectoryRecursively(deleteCtx, storageProvider, provider.DeleteObjectRequest{
+					Bucket:     bucket.BucketName,
+					Region:     bucket.Region,
+					Key:        key,
+					Credential: credentialPayload,
+				})
+				if result.Key == "" {
+					result.Key = key
+				}
+				if result.TargetType == "" {
+					result.TargetType = "directory"
+				}
+			} else {
+				resultCh := make(chan DeleteBucketObjectResult, 1)
+				fileTaskCh <- fileDeleteTask{key: key, result: resultCh}
+				result = <-resultCh
+				if result.Key == "" {
+					result.Key = key
+				}
+				if result.TargetType == "" {
+					result.TargetType = "file"
+				}
+			}
+			results[job.index] = result
+		}
+	}
+
+	batchWG.Add(batchParallelism)
+	for i := 0; i < batchParallelism; i++ {
+		go worker()
+	}
+	for idx, key := range keys {
+		jobCh <- batchDeleteJob{index: idx, key: key}
+	}
+	close(jobCh)
+	batchWG.Wait()
+	close(fileTaskCh)
+	fileWG.Wait()
+
 	return results, nil
 }
 
@@ -699,31 +813,7 @@ func (s *Service) deleteFileObjectsConcurrently(
 	worker := func() {
 		defer wg.Done()
 		for job := range jobCh {
-			deleteErr := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
-				Bucket:     baseRequest.Bucket,
-				Region:     baseRequest.Region,
-				Key:        job.key,
-				Credential: baseRequest.Credential,
-			})
-
-			result := DeleteBucketObjectResult{
-				Key:        job.key,
-				TargetType: "file",
-				Success:    true,
-				Message:    "object deleted",
-			}
-			if deleteErr != nil {
-				mappedErr := mapObjectStorageOperationError(deleteErr, "delete")
-				result.Success = false
-				result.ErrorCode = "provider_operation_failed"
-				result.Message = mappedErr.Error()
-				appErr := &httpresp.AppError{}
-				if errors.As(mappedErr, &appErr) {
-					result.ErrorCode = appErr.Code
-				}
-			} else {
-				result.DeletedObjects = 1
-			}
+			result := s.deleteSingleFileObject(ctx, storageProvider, baseRequest, job.key)
 
 			mu.Lock()
 			resultByIndex[job.index] = result
@@ -742,6 +832,41 @@ func (s *Service) deleteFileObjectsConcurrently(
 	wg.Wait()
 
 	return resultByIndex
+}
+
+func (s *Service) deleteSingleFileObject(
+	ctx context.Context,
+	storageProvider provider.ObjectStorageProvider,
+	baseRequest provider.DeleteObjectRequest,
+	key string,
+) DeleteBucketObjectResult {
+	deleteErr := storageProvider.DeleteObject(ctx, provider.DeleteObjectRequest{
+		Bucket:     baseRequest.Bucket,
+		Region:     baseRequest.Region,
+		Key:        key,
+		Credential: baseRequest.Credential,
+	})
+
+	result := DeleteBucketObjectResult{
+		Key:        key,
+		TargetType: "file",
+		Success:    true,
+		Message:    "object deleted",
+	}
+	if deleteErr != nil {
+		mappedErr := mapObjectStorageOperationError(deleteErr, "delete")
+		result.Success = false
+		result.ErrorCode = "provider_operation_failed"
+		result.Message = mappedErr.Error()
+		result.FailedObjects = 1
+		appErr := &httpresp.AppError{}
+		if errors.As(mappedErr, &appErr) {
+			result.ErrorCode = appErr.Code
+		}
+		return result
+	}
+	result.DeletedObjects = 1
+	return result
 }
 
 func (s *Service) RenameBucketObject(ctx context.Context, projectID uint64, input RenameBucketObjectInput) (RenameBucketObjectResult, error) {
@@ -1523,6 +1648,38 @@ func mapObjectStorageListError(err error) error {
 	}
 }
 
+func mapObjectStorageDeleteError(err error, operation string) *httpresp.AppError {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return httpresp.NewAppError(499, "delete_request_canceled", "delete request was canceled", map[string]string{
+			"operation": operation,
+		})
+	case errors.Is(err, context.DeadlineExceeded):
+		return httpresp.NewAppError(504, "delete_request_timeout", "delete request timed out", map[string]string{
+			"operation": operation,
+		})
+	}
+
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		switch providerErr.Code {
+		case provider.ErrCodeTimeout:
+			return httpresp.NewAppError(504, "delete_request_timeout", "delete request timed out", map[string]string{
+				"providerErrorCode": string(providerErr.Code),
+				"operation":         operation,
+			})
+		}
+	}
+
+	appErr := mapObjectStorageOperationError(err, operation)
+	if typed, ok := appErr.(*httpresp.AppError); ok {
+		return typed
+	}
+	return httpresp.NewAppError(502, "provider_operation_failed", "storage provider operation failed", map[string]string{
+		"operation": operation,
+	})
+}
+
 func mapObjectStorageOperationError(err error, operation string) error {
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) {
@@ -1542,6 +1699,17 @@ func mapObjectStorageOperationError(err error, operation string) error {
 			"operation":         operation,
 		})
 	}
+}
+
+func (s *Service) withDeleteProviderTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.deleteTimeout
+	if timeout <= 0 {
+		timeout = time.Duration(config.DefaultDeleteRequestTimeoutSec) * time.Second
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func mapCDNOperationError(err error, operation string) error {

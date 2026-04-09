@@ -20,6 +20,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   message,
@@ -1649,7 +1650,17 @@ export function StoragePage() {
       title: '会话 ID',
       dataIndex: 'sessionId',
       width: 260,
-      render: (value: string) => <Typography.Text copyable>{value}</Typography.Text>,
+      render: (value: string) => (
+        <Tooltip title={value} placement="topLeft">
+          <Typography.Text
+            copyable={{ text: value }}
+            ellipsis
+            style={{ display: 'inline-block', maxWidth: '100%', verticalAlign: 'bottom' }}
+          >
+            {value}
+          </Typography.Text>
+        </Tooltip>
+      ),
     },
     {
       title: '整体进展',
@@ -1700,7 +1711,10 @@ export function StoragePage() {
 
         const summary = sessionFailureSummaryMap[record.sessionId]
         return (
-          <Typography.Text ellipsis={{ tooltip: summary || '点击“查看明细”生成失败摘要。' }}>
+          <Typography.Text
+            ellipsis={{ tooltip: summary || '点击“查看明细”生成失败摘要。' }}
+            style={{ display: 'inline-block', maxWidth: 320, verticalAlign: 'bottom' }}
+          >
             {summary || '点击“查看明细”生成失败摘要。'}
           </Typography.Text>
         )
@@ -1968,34 +1982,6 @@ export function StoragePage() {
         </Card>
 
         <Card
-          title="Archive Upload Sessions"
-          extra={
-            <Button
-              icon={<ReloadOutlined />}
-              loading={sessionSummariesLoading}
-              onClick={() => void loadUploadSessionSummaries()}
-            >
-              刷新会话
-            </Button>
-          }
-        >
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            <Typography.Text type="secondary">
-              仅展示压缩包上传会话汇总（action = object.upload_archive），可查看对应 object.upload 明细。
-            </Typography.Text>
-            <Table<UploadSessionSummary>
-              rowKey="sessionId"
-              loading={sessionSummariesLoading}
-              columns={sessionColumns}
-              dataSource={sessionSummaries}
-              pagination={{ pageSize: 5 }}
-              locale={{ emptyText: '暂无压缩包上传会话记录。' }}
-              scroll={{ x: 1600 }}
-            />
-          </Space>
-        </Card>
-
-        <Card
           title="Object List"
           extra={
             <Space>
@@ -2052,6 +2038,38 @@ export function StoragePage() {
               },
             }}
           />
+        </Card>
+
+        <Card
+          title="Archive Upload Sessions"
+          extra={
+            <Button
+              icon={<ReloadOutlined />}
+              loading={sessionSummariesLoading}
+              onClick={() => void loadUploadSessionSummaries()}
+            >
+              刷新会话
+            </Button>
+          }
+        >
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Text type="secondary">
+              仅展示压缩包上传会话汇总（action = object.upload_archive），可查看对应 object.upload 明细。
+            </Typography.Text>
+            <div style={{ width: '100%', maxWidth: '100%', overflowX: 'auto' }}>
+              <Table<UploadSessionSummary>
+                rowKey="sessionId"
+                loading={sessionSummariesLoading}
+                columns={sessionColumns}
+                dataSource={sessionSummaries}
+                pagination={{ pageSize: 5 }}
+                locale={{ emptyText: '暂无压缩包上传会话记录。' }}
+                tableLayout="fixed"
+                scroll={{ x: 1600 }}
+                style={{ width: '100%', minWidth: 0 }}
+              />
+            </div>
+          </Space>
         </Card>
       </Space>
 
