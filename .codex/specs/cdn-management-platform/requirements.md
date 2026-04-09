@@ -242,3 +242,15 @@
 3. WHEN 已授权用户发起 `refresh-url` 或 `refresh-directory` 操作，THE CDN 管理平台 SHALL 基于操作类型决定刷新语义而不依赖绑定配置中的 `purgeScope`。
 4. WHILE CDN 绑定配置处于软废弃迁移阶段，THE CDN 管理平台 SHALL 继续兼容历史 `purgeScope` 字段读取且不要求新配置请求提供该字段。
 5. WHEN 平台管理员在项目配置页面查看或编辑 CDN 绑定项，THE CDN 管理平台 SHALL 不再要求填写 `purgeScope` 字段。
+
+### Requirement 18
+
+**User Story:** 作为项目管理员，我希望 CDN 刷新与同步页面和存储页面一样先选择项目与绑定资源再执行操作，这样我可以减少手工输入并降低误操作概率。
+
+#### Acceptance Criteria
+
+1. WHEN 已授权用户进入 CDN 操作页面，THE CDN 管理平台 SHALL 提供项目下拉选择并展示用户可见项目列表。
+2. WHEN 已授权用户选择项目，THE CDN 管理平台 SHALL 提供该项目已绑定 CDN 域名的下拉选择并默认选中主 CDN 域名。
+3. WHEN 已授权用户在资源同步操作中选择项目，THE CDN 管理平台 SHALL 提供该项目已绑定存储桶的下拉选择并默认选中主存储桶。
+4. WHILE 已授权用户在同一项目上下文中切换 URL 刷新、目录刷新与资源同步操作，THE CDN 管理平台 SHALL 复用当前项目与绑定资源选择状态。
+5. IF 已授权用户提交操作时缺少项目或目标绑定资源，THEN THE CDN 管理平台 SHALL 阻止提交并显示可定位的表单校验错误。
