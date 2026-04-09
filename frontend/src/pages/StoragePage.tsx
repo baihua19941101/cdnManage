@@ -160,6 +160,7 @@ type UploadSessionSummary = {
 
 const DEFAULT_UPLOAD_SIZE_LIMIT_BYTES = 20 * 1024 * 1024
 const UPLOAD_STAGE_A_TIMEOUT_MS = 10 * 60 * 1000
+const DELETE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
 const UPLOAD_STAGE_B_POLL_INTERVAL_MS = 1200
 const UPLOAD_STAGE_B_POLL_TIMEOUT_MS = 2 * 60 * 1000
 const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
@@ -691,6 +692,20 @@ const parseUploadPolicyLimitBytes = (data: unknown): number | null => {
   return null
 }
 
+const isTimeoutError = (error: unknown): boolean => {
+  if (!axios.isAxiosError(error)) {
+    return false
+  }
+  if (error.code === 'ECONNABORTED') {
+    return true
+  }
+  const message = normalizeString(error.message).toLowerCase()
+  return message.includes('timeout')
+}
+
+const isCanceledError = (error: unknown): boolean =>
+  axios.isAxiosError(error) && error.code === 'ERR_CANCELED'
+
 const fetchUploadPolicyLimitBytes = async (): Promise<number> => {
   const response = await apiClient.get<ApiResponse<unknown>>('/storage/upload-policy')
   return parseUploadPolicyLimitBytes(response.data?.data) ?? DEFAULT_UPLOAD_SIZE_LIMIT_BYTES
@@ -718,6 +733,9 @@ export function StoragePage() {
   const [uploadStageAProgress, setUploadStageAProgress] = useState(0)
   const [uploadStageAActive, setUploadStageAActive] = useState(false)
   const uploadAbortControllerRef = useRef<AbortController | null>(null)
+  const deleteAbortControllerRef = useRef<AbortController | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deletingScopeLabel, setDeletingScopeLabel] = useState('')
   const [uploadStageBActive, setUploadStageBActive] = useState(false)
   const [uploadStageBSessionID, setUploadStageBSessionID] = useState('')
   const [uploadStageBSummary, setUploadStageBSummary] = useState<UploadSessionSummary | null>(null)
@@ -775,9 +793,45 @@ export function StoragePage() {
     () => () => {
       uploadAbortControllerRef.current?.abort()
       uploadAbortControllerRef.current = null
+      deleteAbortControllerRef.current?.abort()
+      deleteAbortControllerRef.current = null
     },
     [],
   )
+
+  const startDeleteRequest = (scopeLabel: string): AbortController => {
+    deleteAbortControllerRef.current?.abort()
+    const controller = new AbortController()
+    deleteAbortControllerRef.current = controller
+    setDeleting(true)
+    setDeletingScopeLabel(scopeLabel)
+    return controller
+  }
+
+  const finishDeleteRequest = (controller: AbortController) => {
+    if (deleteAbortControllerRef.current !== controller) {
+      return
+    }
+    deleteAbortControllerRef.current = null
+    setDeleting(false)
+    setDeletingScopeLabel('')
+  }
+
+  const cancelDelete = () => {
+    deleteAbortControllerRef.current?.abort()
+  }
+
+  const notifyDeleteRequestError = (error: unknown, scopeLabel: string) => {
+    if (isCanceledError(error)) {
+      messageApi.warning(`${scopeLabel}已取消。`)
+      return
+    }
+    if (isTimeoutError(error)) {
+      messageApi.error(`${scopeLabel}请求超时，请重试或缩小删除范围。`)
+      return
+    }
+    messageApi.error(resolveAPIErrorMessage(error, `${scopeLabel}失败（后端失败）。`))
+  }
 
   const getQuery = () => {
     const values = queryForm.getFieldsValue()
@@ -1097,10 +1151,14 @@ export function StoragePage() {
       return
     }
 
+    const scopeLabel = isDir ? '目录删除' : '对象删除'
+    const abortController = startDeleteRequest(scopeLabel)
     setSubmitting(true)
     try {
       const response = await apiClient.delete<ApiResponse<DeleteObjectPayload>>(`/projects/${projectID}/storage/objects`, {
         params: { bucketName, key },
+        timeout: DELETE_REQUEST_TIMEOUT_MS,
+        signal: abortController.signal,
       })
       const payload = response.data?.data
       const summary = payload?.summary
@@ -1124,8 +1182,9 @@ export function StoragePage() {
         await queryObjects()
       }
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '删除失败。'))
+      notifyDeleteRequestError(error, scopeLabel)
     } finally {
+      finishDeleteRequest(abortController)
       setSubmitting(false)
     }
   }
@@ -1149,6 +1208,8 @@ export function StoragePage() {
       return
     }
 
+    const scopeLabel = '批量删除'
+    const abortController = startDeleteRequest(scopeLabel)
     setSubmitting(true)
     try {
       const response = await apiClient.delete<ApiResponse<BatchDeletePayload>>(
@@ -1158,6 +1219,8 @@ export function StoragePage() {
             bucketName,
             keys,
           },
+          timeout: DELETE_REQUEST_TIMEOUT_MS,
+          signal: abortController.signal,
         },
       )
       const payload = response.data?.data
@@ -1208,8 +1271,9 @@ export function StoragePage() {
       setSelectedObjectKeys([])
       await queryObjects()
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '批量删除失败。'))
+      notifyDeleteRequestError(error, scopeLabel)
     } finally {
+      finishDeleteRequest(abortController)
       setSubmitting(false)
     }
   }
@@ -1935,6 +1999,16 @@ export function StoragePage() {
           title="Object List"
           extra={
             <Space>
+              {deleting ? (
+                <>
+                  <Typography.Text type="secondary">
+                    {deletingScopeLabel || '删除'}进行中...
+                  </Typography.Text>
+                  <Button danger onClick={cancelDelete} size="small">
+                    取消删除
+                  </Button>
+                </>
+              ) : null}
               <Typography.Text type="secondary">当前目录：{currentPrefix || '/'}</Typography.Text>
               <Button onClick={() => void goToParentDirectory()} disabled={!currentPrefix || loading}>
                 返回上一级
