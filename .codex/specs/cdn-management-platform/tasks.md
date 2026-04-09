@@ -379,20 +379,20 @@
     - _Requirements: 17.4_
 
 - [ ] 22. 修复目录删除超时取消并实现上传/删除并发配置化（新需求）
-  - [ ] 22.1 扩展后端配置模型，新增上传/删除并发与删除超时配置项
+  - [x] 22.1 扩展后端配置模型，新增上传/删除并发与删除超时配置项
     - 在 `backend/internal/config/config.go` 增加 `delete` 配置节，至少包含 `parallelism`、`batch_parallelism`、`file_parallelism`、`request_timeout_seconds`、`list_page_size`
     - 在 `upload` 配置节新增 `file_parallelism`，用于非压缩包文件上传并发
     - 为新增配置补充默认值与边界钳制，并在 `backend/config.example.yaml` 增加示例项
     - _Requirements: 1.4, 9.3, 9.4, 12.4, 12.5, 13.1_
-  - [ ] 22.2 修复前端目录删除与批量删除超时取消问题
+  - [x] 22.2 修复前端目录删除与批量删除超时取消问题
     - 为 `/storage/objects` 与 `/storage/objects/batch` 请求覆盖更长超时时间并接入取消控制
     - 区分超时、主动取消、后端失败三类提示，避免统一报“删除失败”
     - _Requirements: 12.4, 12.5, 8.4_
-  - [ ] 22.3 实现目录递归删除并发执行与可控限流
+  - [x] 22.3 实现目录递归删除并发执行与可控限流
     - 在后端目录递归删除链路引入 worker pool，并使用 `delete.parallelism` 控制并发度
     - 保持删除结果统计与失败摘要的一致性，避免重复删除与漏删
     - _Requirements: 12.4, 8.4, 9.4_
-  - [ ] 22.4 实现单文件删除并发能力
+  - [x] 22.4 实现单文件删除并发能力
     - 在批量删除链路中对“文件 key”使用 `delete.file_parallelism` 并发执行删除
     - 保持单文件删除结果与错误码稳定返回，避免并发下统计偏差
     - _Requirements: 12.5, 8.4, 9.4_

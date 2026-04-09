@@ -1133,6 +1133,149 @@ func TestServiceDeleteBucketObjectUsesProviderBoundary(t *testing.T) {
 	require.Equal(t, "assets/old.js", providerStub.lastDelete.Key)
 }
 
+func TestServiceDeleteBucketObjectsUsesFileParallelismForFileKeys(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	registerTestProviders(t, service)
+	service.ConfigureDeleteFileParallelism(3)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		deleteCalls: make(map[string]int),
+	}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-batch-delete-file-parallel-" + suffix,
+		Description: "storage batch delete file parallel test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-batch-delete-file-parallel-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-batch-delete-file-parallel-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	keys := []string{"assets/a.js", "assets/b.js", "assets/c.js", "assets/d.js"}
+	results, err := service.DeleteBucketObjects(ctx, project.ID, DeleteBucketObjectsInput{
+		Keys: keys,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, len(keys))
+
+	for idx, key := range keys {
+		require.Equal(t, key, results[idx].Key)
+		require.Equal(t, "file", results[idx].TargetType)
+		require.True(t, results[idx].Success)
+		require.Equal(t, 1, results[idx].DeletedObjects)
+		require.Equal(t, 0, results[idx].FailedObjects)
+		require.Equal(t, "", results[idx].ErrorCode)
+		require.Equal(t, "object deleted", results[idx].Message)
+	}
+	require.Equal(t, len(keys), providerStub.uniqueDeleteCallCount())
+	require.GreaterOrEqual(t, providerStub.maxConcurrency(), 2)
+}
+
+func TestServiceDeleteBucketObjectsKeepsFileStatsAndErrorsStableUnderParallelism(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	registerTestProviders(t, service)
+	service.ConfigureDeleteFileParallelism(4)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	failedKeys := map[string]struct{}{
+		"assets/b.js": {},
+		"assets/d.js": {},
+	}
+	providerStub := &directoryDeleteWorkerPoolProvider{
+		deleteErrors: map[string]error{
+			"assets/b.js": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"delete_object",
+				provider.ErrCodeOperationFailed,
+				"delete failed",
+				false,
+				nil,
+			),
+			"assets/d.js": provider.NewError(
+				provider.TypeAliyun,
+				provider.ServiceObjectStorage,
+				"delete_object",
+				provider.ErrCodeOperationFailed,
+				"delete failed",
+				false,
+				nil,
+			),
+		},
+		deleteCalls: make(map[string]int),
+	}
+	require.NoError(t, service.RegisterObjectStorageProvider(providerStub))
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "objects-batch-delete-file-errors-" + suffix,
+		Description: "storage batch delete file errors test",
+		Buckets: []ProjectBucketInput{{
+			BucketName: "bucket-batch-delete-file-errors-" + suffix,
+			Region:     "cn-hangzhou",
+			Credential: `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			IsPrimary:  true,
+		}},
+		CDNs: []ProjectCDNInput{{
+			ProviderType: "aliyun",
+			CDNEndpoint:  "https://cdn-batch-delete-file-errors-" + suffix + ".example.com",
+			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
+			PurgeScope:   "url",
+			IsPrimary:    true,
+		}},
+	})
+	require.NoError(t, err)
+
+	keys := []string{"assets/a.js", "assets/b.js", "assets/c.js", "assets/d.js"}
+	results, err := service.DeleteBucketObjects(ctx, project.ID, DeleteBucketObjectsInput{
+		Keys: keys,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, len(keys))
+
+	successCount := 0
+	failureCount := 0
+	for idx, key := range keys {
+		result := results[idx]
+		require.Equal(t, key, result.Key)
+		require.Equal(t, "file", result.TargetType)
+		if _, shouldFail := failedKeys[key]; shouldFail {
+			failureCount++
+			require.False(t, result.Success)
+			require.Equal(t, "provider_operation_failed", result.ErrorCode)
+			require.Contains(t, result.Message, "storage provider operation failed")
+			require.Equal(t, 0, result.DeletedObjects)
+		} else {
+			successCount++
+			require.True(t, result.Success)
+			require.Equal(t, "", result.ErrorCode)
+			require.Equal(t, "object deleted", result.Message)
+			require.Equal(t, 1, result.DeletedObjects)
+		}
+	}
+	require.Equal(t, 2, successCount)
+	require.Equal(t, 2, failureCount)
+	require.Equal(t, len(keys), providerStub.uniqueDeleteCallCount())
+	require.GreaterOrEqual(t, providerStub.maxConcurrency(), 2)
+}
+
 func TestServiceRenameBucketObjectUsesProviderBoundary(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
