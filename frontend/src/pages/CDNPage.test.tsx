@@ -30,8 +30,8 @@ describe('CDNPage refresh interactions', () => {
     })
   })
 
-  it('submits URL refresh request with project bindings defaults', async () => {
-    const getMock = vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+  it('switches to directory refresh and reuses selected project/cdn context', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
       if (url === '/projects') {
         return {
           data: {
@@ -65,7 +65,7 @@ describe('CDNPage refresh interactions', () => {
         code: 'success',
         message: 'ok',
         data: {
-          taskId: 'task-url-1',
+          taskId: 'task-dir-1',
           status: 'accepted',
         },
       },
@@ -75,25 +75,23 @@ describe('CDNPage refresh interactions', () => {
 
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('8 - Demo Project'))
-    fireEvent.change(screen.getByLabelText('URLs（每行一个）'), {
-      target: { value: ' https://cdn.example.com/a.js \n\nhttps://cdn.example.com/b.css  ' },
+    fireEvent.click(screen.getByRole('tab', { name: '目录刷新' }))
+    fireEvent.change(screen.getByLabelText('Directories（每行一个）'), {
+      target: { value: ' /static/ \n\n/assets/images/ ' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /提交 URL 刷新/ }))
+    fireEvent.click(screen.getByRole('button', { name: /提交目录刷新/ }))
 
     await waitFor(() => {
-      expect(postMock).toHaveBeenCalledWith('/projects/8/cdns/refresh-url', {
+      expect(postMock).toHaveBeenCalledWith('/projects/8/cdns/refresh-directory', {
         cdnEndpoint: 'https://primary.cdn.example.com',
-        urls: ['https://cdn.example.com/a.js', 'https://cdn.example.com/b.css'],
+        directories: ['/static/', '/assets/images/'],
       })
     })
 
-    expect(getMock).toHaveBeenCalledWith('/projects')
-    expect(getMock).toHaveBeenCalledWith('/projects/8')
-    expect(await screen.findByText('task-url-1')).toBeInTheDocument()
-    expect(screen.getByText('accepted')).toBeInTheDocument()
+    expect(await screen.findByText('task-dir-1')).toBeInTheDocument()
   })
 
-  it('submits sync request with project bucket default', async () => {
+  it('switches to sync and reuses selected project/cdn/bucket context', async () => {
     vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
       if (url === '/projects') {
         return {
@@ -124,20 +122,21 @@ describe('CDNPage refresh interactions', () => {
     })
 
     const postMock = vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
+      data: {
+        code: 'success',
+        message: 'ok',
         data: {
-          code: 'success',
-          message: 'ok',
-          data: {
-            taskId: 'task-sync-1',
-            status: 'accepted',
-          },
+          taskId: 'task-sync-1',
+          status: 'accepted',
         },
-      } as never)
+      },
+    } as never)
 
     render(<CDNPage />)
 
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('8 - Sync Project'))
+    fireEvent.click(screen.getByRole('tab', { name: '资源同步' }))
     fireEvent.change(screen.getByLabelText('Paths（每行一个）'), {
       target: { value: ' dist/app.js \n\ndist/app.css ' },
     })
@@ -222,6 +221,7 @@ describe('CDNPage refresh interactions', () => {
 
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('10 - No Bucket Project'))
+    fireEvent.click(screen.getByRole('tab', { name: '资源同步' }))
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /提交资源同步/ })).toBeDisabled()
