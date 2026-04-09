@@ -163,6 +163,7 @@ function TaskResultCard({ result }: { result: CDNTaskResult | null }) {
 export function CDNPage() {
   const [messageApi, messageContext] = message.useMessage()
   const [baseForm] = Form.useForm<BaseFormValues>()
+  const [operationForm] = Form.useForm<{ operationInput: string }>()
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const canWrite = isPlatformAdminRole(platformRole)
 
@@ -193,14 +194,12 @@ export function CDNPage() {
   const activeMeta = OPERATION_META[activeOperation]
   const disableActiveSubmit =
     activeOperation === 'sync' ? disableSyncSubmit : disableURLAndDirectorySubmit
+  const showCDNBindingError = hasSelectedProject && !hasCDNBindings
+  const showBucketBindingError = hasSelectedProject && activeOperation === 'sync' && !hasBucketBindings
 
   const getBasePayload = async () => {
     const values = await baseForm.validateFields()
     const projectID = Number(values.projectId)
-    if (!Number.isFinite(projectID) || projectID <= 0) {
-      messageApi.error('Project ID 必须是正整数。')
-      return null
-    }
     return {
       projectID,
       cdnEndpoint: values.cdnEndpoint?.trim() ?? '',
@@ -299,24 +298,24 @@ export function CDNPage() {
     void loadProjectOptions()
   }, [])
 
+  useEffect(() => {
+    operationForm.setFieldValue('operationInput', operationInputs[activeOperation])
+  }, [activeOperation, operationForm, operationInputs])
+
   const submitActiveOperation = async () => {
     if (!canWrite) {
       return
     }
-    const basePayload = await getBasePayload()
-    if (!basePayload) {
+    let basePayload: Awaited<ReturnType<typeof getBasePayload>>
+    try {
+      basePayload = await getBasePayload()
+      await operationForm.validateFields()
+    } catch {
       return
     }
-    if (activeOperation === 'sync' && !basePayload.bucketName) {
-      messageApi.error('请选择 Bucket Name。')
-      return
-    }
-
-    const entries = splitByLines(operationInputs[activeOperation])
-    if (entries.length === 0) {
-      messageApi.error(activeMeta.emptyInputMessage)
-      return
-    }
+    if (!basePayload) return
+    const operationValue = operationForm.getFieldValue('operationInput') ?? ''
+    const entries = splitByLines(operationValue)
 
     setSubmitting(true)
     try {
@@ -383,7 +382,21 @@ export function CDNPage() {
             <Form.Item
               label="项目"
               name="projectId"
-              rules={[{ required: true, message: '请选择项目' }]}
+              rules={[
+                { required: true, message: '请选择项目。' },
+                {
+                  validator: (_, value) => {
+                    if (!value) {
+                      return Promise.resolve()
+                    }
+                    const projectID = Number(value)
+                    if (Number.isFinite(projectID) && projectID > 0) {
+                      return Promise.resolve()
+                    }
+                    return Promise.reject(new Error('项目 ID 必须是正整数。'))
+                  },
+                },
+              ]}
             >
               <Select
                 placeholder="请选择项目"
@@ -399,7 +412,36 @@ export function CDNPage() {
                 }}
               />
             </Form.Item>
-            <Form.Item label="CDN Endpoint" name="cdnEndpoint">
+            <Form.Item
+              label="CDN Endpoint"
+              name="cdnEndpoint"
+              validateStatus={showCDNBindingError ? 'error' : undefined}
+              help={
+                showCDNBindingError
+                  ? '当前项目未绑定 CDN 域名，请先在项目配置中新增 CDN 绑定。'
+                  : undefined
+              }
+              rules={[
+                {
+                  validator: (_, value) => {
+                    const projectID = Number(baseForm.getFieldValue('projectId'))
+                    if (!Number.isFinite(projectID) || projectID <= 0) {
+                      return Promise.resolve()
+                    }
+                    if (!hasCDNBindings) {
+                      return Promise.reject(
+                        new Error('当前项目未绑定 CDN 域名，请先在项目配置中新增 CDN 绑定。'),
+                      )
+                    }
+                    const endpoint = typeof value === 'string' ? value.trim() : ''
+                    if (!endpoint) {
+                      return Promise.reject(new Error('请选择 CDN 域名。'))
+                    }
+                    return Promise.resolve()
+                  },
+                },
+              ]}
+            >
               <Select
                 placeholder="可选，不填时使用后端 primary CDN"
                 style={{ width: 320 }}
@@ -411,7 +453,39 @@ export function CDNPage() {
                 allowClear
               />
             </Form.Item>
-            <Form.Item label="Bucket Name" name="bucketName">
+            <Form.Item
+              label="Bucket Name"
+              name="bucketName"
+              validateStatus={showBucketBindingError ? 'error' : undefined}
+              help={
+                showBucketBindingError
+                  ? '当前项目未绑定 Bucket，请先在项目配置中新增存储桶绑定。'
+                  : undefined
+              }
+              rules={[
+                {
+                  validator: (_, value) => {
+                    if (activeOperation !== 'sync') {
+                      return Promise.resolve()
+                    }
+                    const projectID = Number(baseForm.getFieldValue('projectId'))
+                    if (!Number.isFinite(projectID) || projectID <= 0) {
+                      return Promise.resolve()
+                    }
+                    if (!hasBucketBindings) {
+                      return Promise.reject(
+                        new Error('当前项目未绑定 Bucket，请先在项目配置中新增存储桶绑定。'),
+                      )
+                    }
+                    const bucketName = typeof value === 'string' ? value.trim() : ''
+                    if (!bucketName) {
+                      return Promise.reject(new Error('请选择 Bucket Name。'))
+                    }
+                    return Promise.resolve()
+                  },
+                },
+              ]}
+            >
               <Select
                 placeholder="同步资源时必填"
                 style={{ width: 240 }}
@@ -458,15 +532,61 @@ export function CDNPage() {
         >
           <Tabs
             activeKey={activeOperation}
-            onChange={(key) => setActiveOperation(key as OperationType)}
+            onChange={(key) => {
+              setActiveOperation(key as OperationType)
+            }}
             items={[
               { key: 'url', label: OPERATION_META.url.tabLabel },
               { key: 'directory', label: OPERATION_META.directory.tabLabel },
               { key: 'sync', label: OPERATION_META.sync.tabLabel },
             ]}
           />
-          <Form layout="vertical">
-            <Form.Item label={activeMeta.fieldLabel}>
+          <Form form={operationForm} layout="vertical">
+            <Form.Item
+              label={activeMeta.fieldLabel}
+              name="operationInput"
+              validateTrigger={['onSubmit', 'onBlur']}
+              rules={[
+                {
+                  validator: (_, value: string | undefined) => {
+                    const entries = splitByLines(value ?? '')
+                    if (entries.length === 0) {
+                      return Promise.reject(new Error(activeMeta.emptyInputMessage))
+                    }
+                    if (activeOperation === 'url') {
+                      const invalidURL = entries.find((entry) => {
+                        try {
+                          const parsed = new URL(entry)
+                          return parsed.protocol !== 'http:' && parsed.protocol !== 'https:'
+                        } catch {
+                          return true
+                        }
+                      })
+                      if (invalidURL) {
+                        return Promise.reject(new Error(`URL 格式无效：${invalidURL}`))
+                      }
+                    }
+                    if (activeOperation === 'directory') {
+                      const invalidDirectory = entries.find((entry) => !entry.startsWith('/'))
+                      if (invalidDirectory) {
+                        return Promise.reject(
+                          new Error(`目录路径必须以 "/" 开头：${invalidDirectory}`),
+                        )
+                      }
+                    }
+                    if (activeOperation === 'sync') {
+                      const invalidPath = entries.find((entry) => entry.startsWith('/'))
+                      if (invalidPath) {
+                        return Promise.reject(
+                          new Error(`资源路径不能以 "/" 开头：${invalidPath}`),
+                        )
+                      }
+                    }
+                    return Promise.resolve()
+                  },
+                },
+              ]}
+            >
               <Input.TextArea
                 rows={5}
                 placeholder={activeMeta.placeholder}
@@ -474,6 +594,7 @@ export function CDNPage() {
                 value={operationInputs[activeOperation]}
                 onChange={(event) => {
                   const { value } = event.target
+                  operationForm.setFieldValue('operationInput', value)
                   setOperationInputs((prev) => ({
                     ...prev,
                     [activeOperation]: value,

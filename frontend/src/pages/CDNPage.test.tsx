@@ -76,6 +76,9 @@ describe('CDNPage refresh interactions', () => {
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('8 - Demo Project'))
     fireEvent.click(screen.getByRole('tab', { name: '目录刷新' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /提交目录刷新/ })).toBeEnabled()
+    })
     fireEvent.change(screen.getByLabelText('Directories（每行一个）'), {
       target: { value: ' /static/ \n\n/assets/images/ ' },
     })
@@ -137,6 +140,9 @@ describe('CDNPage refresh interactions', () => {
     fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('8 - Sync Project'))
     fireEvent.click(screen.getByRole('tab', { name: '资源同步' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /提交资源同步/ })).toBeEnabled()
+    })
     fireEvent.change(screen.getByLabelText('Paths（每行一个）'), {
       target: { value: ' dist/app.js \n\ndist/app.css ' },
     })
@@ -226,5 +232,67 @@ describe('CDNPage refresh interactions', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /提交资源同步/ })).toBeDisabled()
     })
+  })
+
+  it('shows field-level validation when project is not selected', async () => {
+    vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: {
+        code: 'success',
+        message: 'ok',
+        data: [],
+      },
+    } as never)
+    const postMock = vi.spyOn(apiClient, 'post')
+
+    render(<CDNPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: /提交 URL 刷新/ }))
+
+    expect(await screen.findByText('请选择项目。')).toBeInTheDocument()
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('shows field-level validation for invalid URL input and blocks submission', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [{ id: 11, name: 'URL Validation Project' }],
+          },
+        } as never
+      }
+      if (url === '/projects/11') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              id: 11,
+              cdns: [{ cdnEndpoint: 'https://cdn.validation.example.com', isPrimary: true }],
+              buckets: [{ bucketName: 'bucket-validation', isPrimary: true }],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${url}`)
+    })
+    const postMock = vi.spyOn(apiClient, 'post')
+
+    render(<CDNPage />)
+
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByText('11 - URL Validation Project'))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /提交 URL 刷新/ })).toBeEnabled()
+    })
+    fireEvent.change(screen.getByLabelText('URLs（每行一个）'), {
+      target: { value: 'invalid-url' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /提交 URL 刷新/ }))
+
+    expect(await screen.findByText('URL 格式无效：invalid-url')).toBeInTheDocument()
+    expect(postMock).not.toHaveBeenCalled()
   })
 })
