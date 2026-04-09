@@ -161,6 +161,7 @@ RBAC 规则：
 - 项目绑定云厂商、存储桶、CDN 地址
 - 项目隔离校验
 - 项目内多云混合绑定规则校验
+- 项目编辑场景下的绑定项凭据保留与替换编排
 
 主要接口：
 
@@ -176,6 +177,23 @@ RBAC 规则：
 - 取消“同一项目内绑定项 provider_type 必须一致”的校验约束。
 - 保留每类绑定“存在绑定时恰好一个 Primary”的约束，Primary 语义限定在同类绑定范围内而非按云厂商分组。
 - 存储与 CDN 调用以“目标绑定项”作为路由入口，根据该绑定项的 `provider_type` 解析并调用对应 Provider。
+
+项目编辑凭据策略：
+
+- 绑定项请求新增 `credentialOperation` 字段，支持 `KEEP` 与 `REPLACE`。
+- 绑定项有 `id` 且未传 `credentialOperation` 时按 `KEEP` 处理，以兼容历史前端提交。
+- `KEEP` 模式复用数据库已加密凭据，不要求重新输入 AK/SK。
+- `REPLACE` 模式要求提交完整凭据字段并按厂商规则校验后覆盖历史密文。
+- 当已有绑定项 `providerType` 发生变化时强制 `REPLACE`，禁止以 `KEEP` 提交。
+- 新增绑定项必须使用 `REPLACE`，避免创建无凭据绑定。
+
+CDN 绑定字段简化策略（软废弃阶段）：
+
+- `cdnEndpoint` 作为绑定核心标识保留，前端展示名称统一为“CDN 域名”。
+- `region` 在 CDN 绑定表单中改为可选字段；后端不再对该字段做必填约束。
+- `purgeScope` 从“CDN 绑定配置输入”中移除，刷新语义改由操作接口 `refresh-url` 与 `refresh-directory` 决定。
+- 在软废弃阶段保留 `project_cdns.purge_scope` 字段以兼容历史数据读取与回滚安全，不作为新配置请求的必需输入。
+- 后续硬删除阶段再通过迁移移除 `project_cdns.purge_scope` 与相关兼容代码。
 
 #### 4. Storage Component
 
@@ -562,6 +580,10 @@ erDiagram
   - 对象存储或 CDN 厂商操作失败
 - `PROVIDER_NOT_REGISTERED`
   - 绑定项使用的云厂商类型未在当前服务实例注册
+- `PROVIDER_CHANGE_REQUIRES_CREDENTIAL_REPLACE`
+  - 已有绑定项变更云厂商类型时未提交凭据替换
+- `CREDENTIAL_NOT_FOUND_FOR_KEEP`
+  - 绑定项使用 KEEP 模式但历史凭据不可用
 - `UPLOAD_ARCHIVE_PROCESSING_FAILED`
   - 压缩包解析或条目处理失败
 - `INVALID_BATCH_OPERATION`
@@ -598,6 +620,9 @@ erDiagram
 - 批量删除返回逐项结果时，必须区分文件与目录、成功与失败及失败原因。
 - 目录重命名出现部分失败时，响应中必须返回已迁移对象数、失败对象数与失败摘要。
 - 创建或更新项目绑定时，若绑定项 provider 未注册，响应必须返回可定位到具体绑定项的错误详情。
+- 已有绑定项变更 provider 且凭据操作模式为 `KEEP` 时，响应必须返回可定位绑定项的约束错误详情。
+- 绑定项以 `KEEP` 提交但无可用历史凭据时，响应必须返回可定位绑定项的凭据缺失错误详情。
+- 刷新操作语义由刷新接口类型决定，不依赖绑定配置中的 `purgeScope` 值。
 
 ## Testing Strategy
 
@@ -611,6 +636,8 @@ erDiagram
 - 首次启动超级管理员初始化逻辑
 - Provider 抽象层的参数组装与错误映射
 - 多云混合绑定校验逻辑与 provider 路由逻辑
+- 绑定项 `KEEP`/`REPLACE` 凭据操作策略与 provider 变更约束
+- CDN 绑定 `region` 可选输入与 `purgeScope` 软废弃兼容策略
 - 审计日志写入触发条件
 - 存储桶文件操作服务逻辑
 - 层级目录列表分页与目录导航逻辑
@@ -635,6 +662,8 @@ erDiagram
 - 登录态与路由守卫
 - 基于权限的菜单与按钮可见性
 - 项目切换后的数据隔离
+- 项目编辑场景下凭据默认保留、替换开关与参数提交一致性
+- 项目配置页“CDN 域名”命名、CDN `region` 可选与 `purgeScope` 输入移除交互
 - 上传、删除、重命名、刷新等关键交互流程
 - 文件树层级导航、每页条数切换、目录删除与批量混合删除交互流程
 - 压缩包上传会话进展、耗时与汇总信息展示
@@ -678,3 +707,5 @@ erDiagram
 - Requirement 13: 由 Storage Component 的并发上传编排、两段进度策略与上传参数语义约束覆盖
 - Requirement 14: 由 Storage Component 的文件重命名流程与目录前缀迁移重命名流程覆盖
 - Requirement 15: 由 Project Management Component 的多云绑定策略、Storage/CDN Component 的按绑定项 provider 路由与阿里云 Provider 接入覆盖
+- Requirement 16: 由 Project Management Component 的绑定项凭据策略、错误处理规则与前端项目编辑交互覆盖
+- Requirement 17: 由 Project Management Component 的 CDN 绑定字段简化策略、CDN 刷新接口语义与前端表单命名/校验规则覆盖

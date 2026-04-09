@@ -397,6 +397,7 @@ func TestServiceUpdateRejectsUnregisteredBucketProvider(t *testing.T) {
 				ProviderType: model.ProviderTypeTencent,
 				BucketName:   "bucket-unregistered-" + suffix,
 				Region:       "ap-guangzhou",
+				CredentialOperation: "REPLACE",
 				Credential:   `{"accessKeyId":"AKID_TEST_B","accessKeySecret":"secret"}`,
 				IsPrimary:    true,
 			},
@@ -405,6 +406,7 @@ func TestServiceUpdateRejectsUnregisteredBucketProvider(t *testing.T) {
 			{
 				ProviderType: model.ProviderTypeAliyun,
 				CDNEndpoint:  "https://cdn-base-" + suffix + ".example.com",
+				CredentialOperation: "REPLACE",
 				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
 				PurgeScope:   "url",
 				IsPrimary:    true,
@@ -424,6 +426,403 @@ func TestServiceUpdateRejectsUnregisteredBucketProvider(t *testing.T) {
 	require.Equal(t, "buckets[0].providerType", details["bindingPath"])
 	require.Equal(t, model.ProviderTypeTencent, details["providerType"])
 	require.Equal(t, "object_storage", details["providerService"])
+}
+
+func TestServiceUpdateKeepsCredentialForExistingBindings(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	registerTestProviders(t, service)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "credential-keep-update-" + suffix,
+		Description: "update existing bindings without replacing credentials",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-keep-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-keep-" + suffix + ".example.com",
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, project.Buckets, 1)
+	require.Len(t, project.CDNs, 1)
+
+	storedBefore, err := store.Projects().GetByID(ctx, project.ID)
+	require.NoError(t, err)
+	require.Len(t, storedBefore.Buckets, 1)
+	require.Len(t, storedBefore.CDNs, 1)
+
+	originalBucketCipher := storedBefore.Buckets[0].CredentialCiphertext
+	originalCDNCipher := storedBefore.CDNs[0].CredentialCiphertext
+
+	_, err = service.Update(ctx, project.ID, UpdateProjectInput{
+		Name:        "credential-keep-update-" + suffix + "-v2",
+		Description: "updated with keep operation",
+		Buckets: []ProjectBucketInput{
+			{
+				ID:                  storedBefore.Buckets[0].ID,
+				ProviderType:        model.ProviderTypeAliyun,
+				BucketName:          storedBefore.Buckets[0].BucketName,
+				Region:              "cn-shanghai",
+				CredentialOperation: "KEEP",
+				IsPrimary:           true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ID:                  storedBefore.CDNs[0].ID,
+				ProviderType:        model.ProviderTypeAliyun,
+				CDNEndpoint:         storedBefore.CDNs[0].CDNEndpoint,
+				Region:              "cn-shanghai",
+				CredentialOperation: "KEEP",
+				PurgeScope:          "directory",
+				IsPrimary:           true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	storedAfter, err := store.Projects().GetByID(ctx, project.ID)
+	require.NoError(t, err)
+	require.Len(t, storedAfter.Buckets, 1)
+	require.Len(t, storedAfter.CDNs, 1)
+	require.Equal(t, "cn-shanghai", storedAfter.Buckets[0].Region)
+	require.Equal(t, "cn-shanghai", storedAfter.CDNs[0].Region)
+	require.Equal(t, "directory", storedAfter.CDNs[0].PurgeScope)
+	require.Equal(t, originalBucketCipher, storedAfter.Buckets[0].CredentialCiphertext)
+	require.Equal(t, originalCDNCipher, storedAfter.CDNs[0].CredentialCiphertext)
+}
+
+func TestServiceUpdateReplacesCredentialForExistingBindings(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	cipher := secure.NewCredentialCipher("projects-service-test-key")
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), cipher)
+	registerTestProviders(t, service)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "credential-replace-update-" + suffix,
+		Description: "update existing bindings with replace operation",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-replace-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret-a"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-replace-" + suffix + ".example.com",
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret-a"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	storedBefore, err := store.Projects().GetByID(ctx, project.ID)
+	require.NoError(t, err)
+	require.Len(t, storedBefore.Buckets, 1)
+	require.Len(t, storedBefore.CDNs, 1)
+
+	originalBucketCipher := storedBefore.Buckets[0].CredentialCiphertext
+	originalCDNCipher := storedBefore.CDNs[0].CredentialCiphertext
+	replacedBucketCredential := `{"accessKeyId":"LTAI_TEST_B","accessKeySecret":"secret-b"}`
+	replacedCDNCredential := `{"accessKeyId":"LTAI_TEST_B","accessKeySecret":"secret-b"}`
+
+	_, err = service.Update(ctx, project.ID, UpdateProjectInput{
+		Name:        "credential-replace-update-" + suffix + "-v2",
+		Description: "updated with replace operation",
+		Buckets: []ProjectBucketInput{
+			{
+				ID:                  storedBefore.Buckets[0].ID,
+				ProviderType:        model.ProviderTypeAliyun,
+				BucketName:          storedBefore.Buckets[0].BucketName,
+				Region:              "cn-shanghai",
+				CredentialOperation: "REPLACE",
+				Credential:          replacedBucketCredential,
+				IsPrimary:           true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ID:                  storedBefore.CDNs[0].ID,
+				ProviderType:        model.ProviderTypeAliyun,
+				CDNEndpoint:         storedBefore.CDNs[0].CDNEndpoint,
+				Region:              "cn-shanghai",
+				CredentialOperation: "REPLACE",
+				Credential:          replacedCDNCredential,
+				PurgeScope:          "directory",
+				IsPrimary:           true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	storedAfter, err := store.Projects().GetByID(ctx, project.ID)
+	require.NoError(t, err)
+	require.Len(t, storedAfter.Buckets, 1)
+	require.Len(t, storedAfter.CDNs, 1)
+	require.Equal(t, "cn-shanghai", storedAfter.Buckets[0].Region)
+	require.Equal(t, "cn-shanghai", storedAfter.CDNs[0].Region)
+	require.Equal(t, "directory", storedAfter.CDNs[0].PurgeScope)
+	require.NotEqual(t, originalBucketCipher, storedAfter.Buckets[0].CredentialCiphertext)
+	require.NotEqual(t, originalCDNCipher, storedAfter.CDNs[0].CredentialCiphertext)
+
+	decryptedBucketCredential, err := cipher.Decrypt(storedAfter.Buckets[0].CredentialCiphertext)
+	require.NoError(t, err)
+	require.Equal(t, replacedBucketCredential, decryptedBucketCredential)
+
+	decryptedCDNCredential, err := cipher.Decrypt(storedAfter.CDNs[0].CredentialCiphertext)
+	require.NoError(t, err)
+	require.Equal(t, replacedCDNCredential, decryptedCDNCredential)
+}
+
+func TestServiceUpdateReturnsBindingDetailsWhenCredentialNotFoundForKeep(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	registerTestProviders(t, service)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "credential-not-found-keep-" + suffix,
+		Description: "keep operation without historical credential should fail",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-not-found-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-not-found-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, db.Model(&model.ProjectBucket{}).
+		Where("id = ?", project.Buckets[0].ID).
+		Update("credential_ciphertext", "").Error)
+
+	_, err = service.Update(ctx, project.ID, UpdateProjectInput{
+		Name:        project.Name,
+		Description: project.Description,
+		Buckets: []ProjectBucketInput{
+			{
+				ID:                  project.Buckets[0].ID,
+				ProviderType:        project.Buckets[0].ProviderType,
+				BucketName:          project.Buckets[0].BucketName,
+				Region:              project.Buckets[0].Region,
+				CredentialOperation: "KEEP",
+				IsPrimary:           true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ID:                  project.CDNs[0].ID,
+				ProviderType:        project.CDNs[0].ProviderType,
+				CDNEndpoint:         project.CDNs[0].CDNEndpoint,
+				Region:              project.CDNs[0].Region,
+				CredentialOperation: "KEEP",
+				PurgeScope:          project.CDNs[0].PurgeScope,
+				IsPrimary:           true,
+			},
+		},
+	})
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "credential_not_found_for_keep", appErr.Code)
+
+	details, ok := appErr.Details.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "buckets", details["bindingType"])
+	require.Equal(t, 0, details["bindingIndex"])
+	require.Equal(t, "buckets[0].credentialOperation", details["bindingPath"])
+}
+
+func TestServiceUpdateRejectsProviderChangeWhenCredentialOperationKeep(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db))
+	registerTestProviders(t, service)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "provider-change-keep-" + suffix,
+		Description: "provider change with keep should fail",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-provider-change-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-provider-change-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = service.Update(ctx, project.ID, UpdateProjectInput{
+		Name:        project.Name,
+		Description: project.Description,
+		Buckets: []ProjectBucketInput{
+			{
+				ID:                  project.Buckets[0].ID,
+				ProviderType:        model.ProviderTypeTencent,
+				BucketName:          project.Buckets[0].BucketName,
+				Region:              project.Buckets[0].Region,
+				CredentialOperation: "KEEP",
+				IsPrimary:           true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ID:                  project.CDNs[0].ID,
+				ProviderType:        project.CDNs[0].ProviderType,
+				CDNEndpoint:         project.CDNs[0].CDNEndpoint,
+				Region:              project.CDNs[0].Region,
+				CredentialOperation: "KEEP",
+				PurgeScope:          project.CDNs[0].PurgeScope,
+				IsPrimary:           true,
+			},
+		},
+	})
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "provider_change_requires_credential_replace", appErr.Code)
+
+	details, ok := appErr.Details.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "buckets", details["bindingType"])
+	require.Equal(t, 0, details["bindingIndex"])
+	require.Equal(t, "buckets[0].credentialOperation", details["bindingPath"])
+}
+
+func TestServiceUpdateRejectsNewBindingWhenCredentialOperationKeep(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Projects(), repository.NewGormTxManager(db), secure.NewCredentialCipher("projects-service-test-key"))
+	registerTestProviders(t, service)
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	project, err := service.Create(ctx, CreateProjectInput{
+		Name:        "new-binding-keep-" + suffix,
+		Description: "new binding with keep should fail",
+		Buckets: []ProjectBucketInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				BucketName:   "bucket-existing-" + suffix,
+				Region:       "cn-hangzhou",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				IsPrimary:    true,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ProviderType: model.ProviderTypeAliyun,
+				CDNEndpoint:  "https://cdn-existing-" + suffix + ".example.com",
+				Credential:   `{"accessKeyId":"LTAI_TEST_A","accessKeySecret":"secret"}`,
+				PurgeScope:   "url",
+				IsPrimary:    true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = service.Update(ctx, project.ID, UpdateProjectInput{
+		Name:        project.Name,
+		Description: project.Description,
+		Buckets: []ProjectBucketInput{
+			{
+				ID:                  project.Buckets[0].ID,
+				ProviderType:        project.Buckets[0].ProviderType,
+				BucketName:          project.Buckets[0].BucketName,
+				Region:              project.Buckets[0].Region,
+				CredentialOperation: "KEEP",
+				IsPrimary:           true,
+			},
+			{
+				ProviderType:        model.ProviderTypeTencent,
+				BucketName:          "bucket-new-" + suffix,
+				Region:              "ap-guangzhou",
+				CredentialOperation: "KEEP",
+				IsPrimary:           false,
+			},
+		},
+		CDNs: []ProjectCDNInput{
+			{
+				ID:                  project.CDNs[0].ID,
+				ProviderType:        project.CDNs[0].ProviderType,
+				CDNEndpoint:         project.CDNs[0].CDNEndpoint,
+				Region:              project.CDNs[0].Region,
+				CredentialOperation: "KEEP",
+				PurgeScope:          project.CDNs[0].PurgeScope,
+				IsPrimary:           true,
+			},
+		},
+	})
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 400, appErr.StatusCode)
+	require.Equal(t, "credential_missing_for_new_binding", appErr.Code)
+
+	details, ok := appErr.Details.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "buckets", details["bindingType"])
+	require.Equal(t, 1, details["bindingIndex"])
+	require.Equal(t, "buckets[1].credentialOperation", details["bindingPath"])
 }
 
 func TestServiceUpdateCDNsRejectsUnregisteredCDNProvider(t *testing.T) {
