@@ -538,3 +538,110 @@ describe('StoragePage upload stage A interactions', () => {
     expect(failureTexts.length).toBeGreaterThan(0)
   }, 20000)
 })
+
+describe('StoragePage delete interactions', () => {
+  beforeEach(() => {
+    act(() => {
+      useAuthStore.getState().setSession({
+        token: 'token',
+        user: {
+          id: 1,
+          email: 'admin@example.com',
+          platformRole: 'platform_admin',
+          status: 'active',
+        },
+      })
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    cleanup()
+    act(() => {
+      useAuthStore.getState().clearSession()
+      useAuthStore.getState().setInitialized(false)
+    })
+  })
+
+  it('supports canceling batch delete request and keeps timeout override', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/storage/upload-policy') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { maxUploadSizeBytes: 20 * 1024 * 1024 },
+          },
+        } as never
+      }
+      if (url === '/projects') {
+        return {
+          data: { code: 'success', message: 'ok', data: [{ id: 11, name: 'Delete Project' }] },
+        } as never
+      }
+      if (url === '/projects/11') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { id: 11, buckets: [{ bucketName: 'demo-bucket' }] },
+          },
+        } as never
+      }
+      if (url === '/projects/11/storage/objects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: { objects: [{ key: 'folder/a.txt', size: 11, isDir: false }] },
+          },
+        } as never
+      }
+      if (url === '/projects/11/storage/audits') {
+        return { data: { code: 'success', message: 'ok', data: { logs: [] } } } as never
+      }
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+
+    const deleteMock = vi.spyOn(apiClient, 'delete').mockImplementation(async (url, config) => {
+      if (url !== '/projects/11/storage/objects/batch') {
+        throw new Error(`unexpected DELETE ${String(url)}`)
+      }
+      return await new Promise((_, reject) => {
+        const signal = (config as { signal?: AbortSignal } | undefined)?.signal
+        signal?.addEventListener('abort', () => {
+          reject(new AxiosError('canceled', 'ERR_CANCELED'))
+        })
+      })
+    })
+
+    render(<StoragePage />)
+    await selectProjectAndBucket('11 - Delete Project', 'demo-bucket')
+
+    fireEvent.click(screen.getByText(queryButtonLabel))
+    await screen.findByText('folder')
+
+    fireEvent.click(screen.getAllByRole('checkbox')[1]!)
+    fireEvent.click(screen.getByRole('button', { name: /批量删除/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /OK|确定|确 定/ }))
+
+    expect(await screen.findByRole('button', { name: '取消删除' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '取消删除' }))
+
+    expect(await screen.findByText('批量删除已取消。')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(deleteMock).toHaveBeenCalledTimes(1)
+    })
+    expect(deleteMock).toHaveBeenCalledWith(
+      '/projects/11/storage/objects/batch',
+      expect.objectContaining({
+        timeout: 300000,
+        data: {
+          bucketName: 'demo-bucket',
+          keys: ['folder/a.txt'],
+        },
+        signal: expect.any(AbortSignal),
+      }),
+    )
+  }, 20000)
+})
