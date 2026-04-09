@@ -1063,7 +1063,7 @@ func (s *Service) replaceCDNBindings(ctx context.Context, repo projectCDNReposit
 			return err
 		}
 
-		purgeScope := cdn.PurgeScope
+		purgeScope := strings.TrimSpace(cdn.PurgeScope)
 		if purgeScope == "" {
 			purgeScope = "url"
 		}
@@ -1194,6 +1194,9 @@ func (s *Service) prepareUpdateBindings(
 		if hasExisting {
 			if strings.TrimSpace(cdn.ProviderType) == "" {
 				cdn.ProviderType = existingCDN.ProviderType
+			}
+			if strings.TrimSpace(cdn.PurgeScope) == "" {
+				cdn.PurgeScope = existingCDN.PurgeScope
 			}
 
 			if !strings.EqualFold(cdn.ProviderType, existingCDN.ProviderType) && operation != credentialOperationReplace {
