@@ -91,7 +91,7 @@ describe('CDNPage refresh interactions', () => {
     expect(await screen.findByText('task-dir-1')).toBeInTheDocument()
   })
 
-  it('switches to sync and reuses selected project/cdn/bucket context', async () => {
+  it('switches to sync and submits bucketName from project bucket bindings', async () => {
     vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
       if (url === '/projects') {
         return {
