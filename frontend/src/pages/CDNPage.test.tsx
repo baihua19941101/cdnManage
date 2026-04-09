@@ -30,7 +30,36 @@ describe('CDNPage refresh interactions', () => {
     })
   })
 
-  it('submits URL refresh request with normalized urls', async () => {
+  it('submits URL refresh request with project bindings defaults', async () => {
+    const getMock = vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [{ id: 8, name: 'Demo Project' }],
+          },
+        } as never
+      }
+      if (url === '/projects/8') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              id: 8,
+              cdns: [
+                { cdnEndpoint: 'https://primary.cdn.example.com', isPrimary: true },
+                { cdnEndpoint: 'https://backup.cdn.example.com', isPrimary: false },
+              ],
+              buckets: [{ bucketName: 'assets-primary', isPrimary: true }],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${url}`)
+    })
+
     const postMock = vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
       data: {
         code: 'success',
@@ -44,7 +73,8 @@ describe('CDNPage refresh interactions', () => {
 
     render(<CDNPage />)
 
-    fireEvent.change(screen.getByPlaceholderText('例如 1'), { target: { value: '8' } })
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByText('8 - Demo Project'))
     fireEvent.change(screen.getByLabelText('URLs（每行一个）'), {
       target: { value: ' https://cdn.example.com/a.js \n\nhttps://cdn.example.com/b.css  ' },
     })
@@ -52,24 +82,53 @@ describe('CDNPage refresh interactions', () => {
 
     await waitFor(() => {
       expect(postMock).toHaveBeenCalledWith('/projects/8/cdns/refresh-url', {
-        cdnEndpoint: '',
+        cdnEndpoint: 'https://primary.cdn.example.com',
         urls: ['https://cdn.example.com/a.js', 'https://cdn.example.com/b.css'],
       })
     })
 
+    expect(getMock).toHaveBeenCalledWith('/projects')
+    expect(getMock).toHaveBeenCalledWith('/projects/8')
     expect(await screen.findByText('task-url-1')).toBeInTheDocument()
     expect(screen.getByText('accepted')).toBeInTheDocument()
   })
 
-  it('submits directory refresh request with normalized directories', async () => {
-    const postMock = vi
-      .spyOn(apiClient, 'post')
-      .mockResolvedValueOnce({
+  it('submits sync request with project bucket default', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [{ id: 8, name: 'Sync Project' }],
+          },
+        } as never
+      }
+      if (url === '/projects/8') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              id: 8,
+              cdns: [{ cdnEndpoint: 'https://cdn.sync.example.com', isPrimary: true }],
+              buckets: [
+                { bucketName: 'bucket-main', isPrimary: true },
+                { bucketName: 'bucket-backup', isPrimary: false },
+              ],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${url}`)
+    })
+
+    const postMock = vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
         data: {
           code: 'success',
           message: 'ok',
           data: {
-            taskId: 'task-dir-1',
+            taskId: 'task-sync-1',
             status: 'accepted',
           },
         },
@@ -77,19 +136,21 @@ describe('CDNPage refresh interactions', () => {
 
     render(<CDNPage />)
 
-    fireEvent.change(screen.getByPlaceholderText('例如 1'), { target: { value: '8' } })
-    fireEvent.change(screen.getByLabelText('Directories（每行一个）'), {
-      target: { value: ' /static/ \n\n/assets/images/ ' },
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByText('8 - Sync Project'))
+    fireEvent.change(screen.getByLabelText('Paths（每行一个）'), {
+      target: { value: ' dist/app.js \n\ndist/app.css ' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /提交目录刷新/ }))
+    fireEvent.click(screen.getByRole('button', { name: /提交资源同步/ }))
 
     await waitFor(() => {
-      expect(postMock).toHaveBeenCalledWith('/projects/8/cdns/refresh-directory', {
-        cdnEndpoint: '',
-        directories: ['/static/', '/assets/images/'],
+      expect(postMock).toHaveBeenCalledWith('/projects/8/cdns/sync', {
+        cdnEndpoint: 'https://cdn.sync.example.com',
+        bucketName: 'bucket-main',
+        paths: ['dist/app.js', 'dist/app.css'],
       })
     })
 
-    expect(await screen.findByText('task-dir-1')).toBeInTheDocument()
+    expect(await screen.findByText('task-sync-1')).toBeInTheDocument()
   })
 })
