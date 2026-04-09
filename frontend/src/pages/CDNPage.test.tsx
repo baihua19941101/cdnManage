@@ -153,4 +153,78 @@ describe('CDNPage refresh interactions', () => {
 
     expect(await screen.findByText('task-sync-1')).toBeInTheDocument()
   })
+
+  it('disables URL refresh button when project has no CDN bindings', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [{ id: 9, name: 'No CDN Project' }],
+          },
+        } as never
+      }
+      if (url === '/projects/9') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              id: 9,
+              cdns: [],
+              buckets: [{ bucketName: 'bucket-only', isPrimary: true }],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${url}`)
+    })
+
+    render(<CDNPage />)
+
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByText('9 - No CDN Project'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /提交 URL 刷新/ })).toBeDisabled()
+    })
+  })
+
+  it('disables sync button when project has no bucket bindings', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [{ id: 10, name: 'No Bucket Project' }],
+          },
+        } as never
+      }
+      if (url === '/projects/10') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              id: 10,
+              cdns: [{ cdnEndpoint: 'https://cdn.no-bucket.example.com', isPrimary: true }],
+              buckets: [],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${url}`)
+    })
+
+    render(<CDNPage />)
+
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByText('10 - No Bucket Project'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /提交资源同步/ })).toBeDisabled()
+    })
+  })
 })

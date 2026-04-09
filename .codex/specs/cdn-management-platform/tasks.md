@@ -426,7 +426,7 @@
     - 复用项目列表接口加载用户可见项目选项，并在选择项目后加载该项目绑定的 CDN 域名与存储桶列表
     - 统一维护 `projectId`、`cdnEndpoint`、`bucketName` 的页面级共享状态
     - _Requirements: 18.1, 18.2, 18.3_
-  - [ ] 23.2 实现 CDN 域名与存储桶默认值策略
+  - [x] 23.2 实现 CDN 域名与存储桶默认值策略
     - 项目切换后默认选中 Primary CDN 域名与 Primary Bucket；无 Primary 时回退到首个可选项
     - 绑定列表为空时展示可读提示并禁用对应提交按钮
     - _Requirements: 18.2, 18.3, 18.5_
