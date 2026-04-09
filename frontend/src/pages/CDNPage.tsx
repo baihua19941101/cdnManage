@@ -6,11 +6,12 @@ import {
   Descriptions,
   Form,
   Input,
+  Select,
   Space,
   Typography,
   message,
 } from 'antd'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -35,6 +36,7 @@ type CDNTaskResult = {
 type BaseFormValues = {
   projectId: string
   cdnEndpoint?: string
+  bucketName?: string
 }
 
 type URLRefreshFormValues = {
@@ -46,8 +48,24 @@ type DirectoryRefreshFormValues = {
 }
 
 type SyncFormValues = {
-  bucketName: string
   paths: string
+}
+
+type ProjectOption = {
+  id: number
+  name: string
+}
+
+type ProjectDetail = {
+  id: number
+  buckets?: Array<{
+    bucketName: string
+    isPrimary?: boolean
+  }>
+  cdns?: Array<{
+    cdnEndpoint: string
+    isPrimary?: boolean
+  }>
 }
 
 const splitByLines = (value: string) =>
@@ -118,6 +136,11 @@ export function CDNPage() {
   const [urlSubmitting, setURLSubmitting] = useState(false)
   const [directorySubmitting, setDirectorySubmitting] = useState(false)
   const [syncSubmitting, setSyncSubmitting] = useState(false)
+  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([])
+  const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
+  const [cdnOptions, setCDNOptions] = useState<string[]>([])
+  const [bucketOptions, setBucketOptions] = useState<string[]>([])
+  const [bindingsLoading, setBindingsLoading] = useState(false)
 
   const [urlResult, setURLResult] = useState<CDNTaskResult | null>(null)
   const [directoryResult, setDirectoryResult] = useState<CDNTaskResult | null>(null)
@@ -133,8 +156,101 @@ export function CDNPage() {
     return {
       projectID,
       cdnEndpoint: values.cdnEndpoint?.trim() ?? '',
+      bucketName: values.bucketName?.trim() ?? '',
     }
   }
+
+  const pickPrimaryOrFirst = <T,>(
+    items: T[],
+    valueGetter: (item: T) => string | undefined,
+    primaryGetter: (item: T) => boolean | undefined,
+  ) => {
+    const normalized = items
+      .map((item) => valueGetter(item)?.trim())
+      .filter((value): value is string => Boolean(value))
+    if (normalized.length === 0) {
+      return ''
+    }
+    const primary = items
+      .find((item) => {
+        const value = valueGetter(item)?.trim()
+        return Boolean(value) && primaryGetter(item)
+      })
+    const primaryValue = primary ? valueGetter(primary)?.trim() : ''
+    return primaryValue || normalized[0]
+  }
+
+  const loadProjectOptions = async () => {
+    setProjectOptionsLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects')
+      const items = Array.isArray(response.data.data) ? response.data.data : []
+      setProjectOptions(items)
+    } catch (error) {
+      setProjectOptions([])
+      messageApi.error(resolveAPIErrorMessage(error, '项目列表加载失败。'))
+    } finally {
+      setProjectOptionsLoading(false)
+    }
+  }
+
+  const loadBindingsByProject = async (projectID: number) => {
+    if (!Number.isFinite(projectID) || projectID <= 0) {
+      setCDNOptions([])
+      setBucketOptions([])
+      baseForm.setFieldsValue({
+        cdnEndpoint: '',
+        bucketName: '',
+      })
+      return
+    }
+
+    setBindingsLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<ProjectDetail>>(`/projects/${projectID}`)
+      const project = response.data.data
+      const cdnList =
+        Array.isArray(project?.cdns)
+          ? project.cdns
+              .map((cdn) => cdn.cdnEndpoint?.trim())
+              .filter((endpoint): endpoint is string => Boolean(endpoint))
+          : []
+      const bucketList =
+        Array.isArray(project?.buckets)
+          ? project.buckets
+              .map((bucket) => bucket.bucketName?.trim())
+              .filter((name): name is string => Boolean(name))
+          : []
+
+      const nextCDN = Array.isArray(project?.cdns)
+        ? pickPrimaryOrFirst(project.cdns, (item) => item.cdnEndpoint, (item) => item.isPrimary)
+        : ''
+      const nextBucket = Array.isArray(project?.buckets)
+        ? pickPrimaryOrFirst(project.buckets, (item) => item.bucketName, (item) => item.isPrimary)
+        : ''
+
+      setCDNOptions(cdnList)
+      setBucketOptions(bucketList)
+      baseForm.setFieldsValue({
+        cdnEndpoint: nextCDN,
+        bucketName: nextBucket,
+      })
+    } catch (error) {
+      setCDNOptions([])
+      setBucketOptions([])
+      baseForm.setFieldsValue({
+        cdnEndpoint: '',
+        bucketName: '',
+      })
+      messageApi.error(resolveAPIErrorMessage(error, '项目绑定加载失败。'))
+    } finally {
+      setBindingsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadProjectOptions()
+  }, [])
 
   const submitURLRefresh = async () => {
     if (!canWrite) {
@@ -214,6 +330,10 @@ export function CDNPage() {
     }
 
     const values = await syncForm.validateFields()
+    if (!basePayload.bucketName) {
+      messageApi.error('请选择 Bucket Name。')
+      return
+    }
     const paths = splitByLines(values.paths)
     if (paths.length === 0) {
       messageApi.error('请至少输入一个资源路径。')
@@ -226,7 +346,7 @@ export function CDNPage() {
         `/projects/${basePayload.projectID}/cdns/sync`,
         {
           cdnEndpoint: basePayload.cdnEndpoint,
-          bucketName: values.bucketName.trim(),
+          bucketName: basePayload.bucketName,
           paths,
         },
       )
@@ -256,19 +376,49 @@ export function CDNPage() {
             form={baseForm}
             layout="inline"
             style={{ rowGap: 12 }}
-            initialValues={{ projectId: '', cdnEndpoint: '' }}
+            initialValues={{ projectId: '', cdnEndpoint: '', bucketName: '' }}
           >
             <Form.Item
-              label="Project ID"
+              label="项目"
               name="projectId"
-              rules={[{ required: true, message: '请输入 Project ID' }]}
+              rules={[{ required: true, message: '请选择项目' }]}
             >
-              <Input placeholder="例如 1" style={{ width: 160 }} />
+              <Select
+                placeholder="请选择项目"
+                style={{ width: 220 }}
+                loading={projectOptionsLoading}
+                options={projectOptions.map((project) => ({
+                  value: String(project.id),
+                  label: `${project.id} - ${project.name}`,
+                }))}
+                onChange={(value) => {
+                  const projectID = Number(value)
+                  void loadBindingsByProject(projectID)
+                }}
+              />
             </Form.Item>
             <Form.Item label="CDN Endpoint" name="cdnEndpoint">
-              <Input
+              <Select
                 placeholder="可选，不填时使用后端 primary CDN"
-                style={{ width: 420 }}
+                style={{ width: 320 }}
+                loading={bindingsLoading}
+                options={cdnOptions.map((endpoint) => ({
+                  value: endpoint,
+                  label: endpoint,
+                }))}
+                allowClear
+              />
+            </Form.Item>
+            <Form.Item label="Bucket Name" name="bucketName">
+              <Select
+                placeholder="同步资源时必填"
+                style={{ width: 240 }}
+                loading={bindingsLoading}
+                options={bucketOptions.map((bucketName) => ({
+                  value: bucketName,
+                  label: bucketName,
+                }))}
+                allowClear
               />
             </Form.Item>
           </Form>
@@ -347,14 +497,7 @@ export function CDNPage() {
             </Button>
           }
         >
-          <Form<SyncFormValues> form={syncForm} layout="vertical" initialValues={{ bucketName: '', paths: '' }}>
-            <Form.Item
-              label="Bucket Name"
-              name="bucketName"
-              rules={[{ required: true, message: '请输入 Bucket Name' }]}
-            >
-              <Input placeholder="例如 project-assets" />
-            </Form.Item>
+          <Form<SyncFormValues> form={syncForm} layout="vertical" initialValues={{ paths: '' }}>
             <Form.Item
               label="Paths（每行一个）"
               name="paths"
