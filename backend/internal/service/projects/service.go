@@ -26,6 +26,11 @@ type Service struct {
 	syncTaskTTL      time.Duration
 }
 
+const (
+	credentialOperationKeep    = "KEEP"
+	credentialOperationReplace = "REPLACE"
+)
+
 type credentialCipher interface {
 	Encrypt(plaintext string) (string, error)
 	Decrypt(ciphertext string) (string, error)
@@ -46,18 +51,22 @@ type UpdateProjectInput struct {
 }
 
 type ProjectBucketInput struct {
+	ID                   uint64
 	ProviderType         string
 	BucketName           string
 	Region               string
+	CredentialOperation  string
 	Credential           string
 	CredentialCiphertext string
 	IsPrimary            bool
 }
 
 type ProjectCDNInput struct {
+	ID                   uint64
 	ProviderType         string
 	CDNEndpoint          string
 	Region               string
+	CredentialOperation  string
 	Credential           string
 	CredentialCiphertext string
 	PurgeScope           string
@@ -226,20 +235,20 @@ func (s *Service) Create(ctx context.Context, input CreateProjectInput) (*model.
 }
 
 func (s *Service) Update(ctx context.Context, projectID uint64, input UpdateProjectInput) (*model.Project, error) {
-	normalizedBuckets, err := s.normalizeBucketsWithProviderDetection(input.Buckets)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateBindings(normalizedBuckets, input.CDNs); err != nil {
-		return nil, err
-	}
-	if err := s.validateBindingProviderRegistration(normalizedBuckets, input.CDNs); err != nil {
-		return nil, err
-	}
-
 	project, err := s.projects.GetByID(ctx, projectID)
 	if err != nil {
 		return nil, httpresp.NewAppError(404, "project_not_found", "project not found", nil)
+	}
+
+	normalizedBuckets, normalizedCDNs, err := s.prepareUpdateBindings(input.Buckets, input.CDNs, project.Buckets, project.CDNs)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBindings(normalizedBuckets, normalizedCDNs); err != nil {
+		return nil, err
+	}
+	if err := s.validateBindingProviderRegistration(normalizedBuckets, normalizedCDNs); err != nil {
+		return nil, err
 	}
 
 	project.Name = input.Name
@@ -248,7 +257,7 @@ func (s *Service) Update(ctx context.Context, projectID uint64, input UpdateProj
 		if err := repos.Projects().Update(ctx, project); err != nil {
 			return fmt.Errorf("update project: %w", err)
 		}
-		return s.replaceBindings(ctx, repos, projectID, normalizedBuckets, input.CDNs)
+		return s.replaceBindings(ctx, repos, projectID, normalizedBuckets, normalizedCDNs)
 	}); err != nil {
 		return nil, err
 	}
@@ -868,13 +877,9 @@ func (s *Service) replaceBindings(ctx context.Context, repos repository.Reposito
 	}
 
 	for _, bucket := range buckets {
-		credentialCiphertext := bucket.CredentialCiphertext
-		if s.credentialCipher != nil {
-			encrypted, err := s.credentialCipher.Encrypt(bucketCredentialPlaintext(bucket))
-			if err != nil {
-				return fmt.Errorf("encrypt bucket credential: %w", err)
-			}
-			credentialCiphertext = encrypted
+		credentialCiphertext, err := s.resolveBucketCredentialCiphertext(bucket)
+		if err != nil {
+			return err
 		}
 
 		if err := repos.ProjectBuckets().Create(ctx, &model.ProjectBucket{
@@ -1053,13 +1058,9 @@ func (s *Service) replaceCDNBindings(ctx context.Context, repo projectCDNReposit
 		}
 	}
 	for _, cdn := range cdns {
-		credentialCiphertext := cdn.CredentialCiphertext
-		if s.credentialCipher != nil {
-			encrypted, err := s.credentialCipher.Encrypt(cdnCredentialPlaintext(cdn))
-			if err != nil {
-				return fmt.Errorf("encrypt cdn credential: %w", err)
-			}
-			credentialCiphertext = encrypted
+		credentialCiphertext, err := s.resolveCDNCredentialCiphertext(cdn)
+		if err != nil {
+			return err
 		}
 
 		purgeScope := cdn.PurgeScope
@@ -1079,6 +1080,176 @@ func (s *Service) replaceCDNBindings(ctx context.Context, repo projectCDNReposit
 		}
 	}
 	return nil
+}
+
+func (s *Service) resolveBucketCredentialCiphertext(bucket ProjectBucketInput) (string, error) {
+	if normalizeCredentialOperation(bucket.CredentialOperation) == credentialOperationKeep {
+		return bucket.CredentialCiphertext, nil
+	}
+
+	credentialCiphertext := bucket.CredentialCiphertext
+	if s.credentialCipher != nil {
+		encrypted, err := s.credentialCipher.Encrypt(bucketCredentialPlaintext(bucket))
+		if err != nil {
+			return "", fmt.Errorf("encrypt bucket credential: %w", err)
+		}
+		credentialCiphertext = encrypted
+	}
+	return credentialCiphertext, nil
+}
+
+func (s *Service) resolveCDNCredentialCiphertext(cdn ProjectCDNInput) (string, error) {
+	if normalizeCredentialOperation(cdn.CredentialOperation) == credentialOperationKeep {
+		return cdn.CredentialCiphertext, nil
+	}
+
+	credentialCiphertext := cdn.CredentialCiphertext
+	if s.credentialCipher != nil {
+		encrypted, err := s.credentialCipher.Encrypt(cdnCredentialPlaintext(cdn))
+		if err != nil {
+			return "", fmt.Errorf("encrypt cdn credential: %w", err)
+		}
+		credentialCiphertext = encrypted
+	}
+	return credentialCiphertext, nil
+}
+
+func (s *Service) prepareUpdateBindings(
+	buckets []ProjectBucketInput,
+	cdns []ProjectCDNInput,
+	existingBuckets []model.ProjectBucket,
+	existingCDNs []model.ProjectCDN,
+) ([]ProjectBucketInput, []ProjectCDNInput, error) {
+	bucketMap := make(map[uint64]model.ProjectBucket, len(existingBuckets))
+	for _, bucket := range existingBuckets {
+		bucketMap[bucket.ID] = bucket
+	}
+
+	resolvedBuckets := make([]ProjectBucketInput, 0, len(buckets))
+	for index, bucket := range buckets {
+		existingBucket, hasExisting := bucketMap[bucket.ID]
+		operation := normalizeCredentialOperation(bucket.CredentialOperation)
+		if hasExisting && operation == "" {
+			operation = credentialOperationKeep
+		}
+
+		if !hasExisting && operation != credentialOperationReplace {
+			return nil, nil, bindingCredentialOperationError("credential_missing_for_new_binding", "new binding requires credential replacement", "buckets", index)
+		}
+
+		if hasExisting && !isValidCredentialOperation(operation) {
+			return nil, nil, invalidCredentialOperationError("buckets", index, operation)
+		}
+
+		if hasExisting {
+			if strings.TrimSpace(bucket.ProviderType) == "" {
+				bucket.ProviderType = existingBucket.ProviderType
+			}
+
+			if !strings.EqualFold(bucket.ProviderType, existingBucket.ProviderType) && operation != credentialOperationReplace {
+				return nil, nil, bindingCredentialOperationError("provider_change_requires_credential_replace", "provider type change requires credential replacement", "buckets", index)
+			}
+
+			if operation == credentialOperationKeep {
+				if strings.TrimSpace(existingBucket.CredentialCiphertext) == "" {
+					return nil, nil, bindingCredentialOperationError("credential_not_found_for_keep", "historical credential was not found for keep operation", "buckets", index)
+				}
+				bucket.Credential = ""
+				bucket.CredentialCiphertext = existingBucket.CredentialCiphertext
+				bucket.CredentialOperation = credentialOperationKeep
+				resolvedBuckets = append(resolvedBuckets, bucket)
+				continue
+			}
+		}
+
+		normalizedBucket, err := s.normalizeBucketWithProviderDetection(bucket)
+		if err != nil {
+			return nil, nil, err
+		}
+		normalizedBucket.CredentialOperation = credentialOperationReplace
+		resolvedBuckets = append(resolvedBuckets, normalizedBucket)
+	}
+
+	cdnMap := make(map[uint64]model.ProjectCDN, len(existingCDNs))
+	for _, cdn := range existingCDNs {
+		cdnMap[cdn.ID] = cdn
+	}
+
+	resolvedCDNs := make([]ProjectCDNInput, 0, len(cdns))
+	for index, cdn := range cdns {
+		existingCDN, hasExisting := cdnMap[cdn.ID]
+		operation := normalizeCredentialOperation(cdn.CredentialOperation)
+		if hasExisting && operation == "" {
+			operation = credentialOperationKeep
+		}
+
+		if !hasExisting && operation != credentialOperationReplace {
+			return nil, nil, bindingCredentialOperationError("credential_missing_for_new_binding", "new binding requires credential replacement", "cdns", index)
+		}
+
+		if hasExisting && !isValidCredentialOperation(operation) {
+			return nil, nil, invalidCredentialOperationError("cdns", index, operation)
+		}
+
+		if hasExisting {
+			if strings.TrimSpace(cdn.ProviderType) == "" {
+				cdn.ProviderType = existingCDN.ProviderType
+			}
+
+			if !strings.EqualFold(cdn.ProviderType, existingCDN.ProviderType) && operation != credentialOperationReplace {
+				return nil, nil, bindingCredentialOperationError("provider_change_requires_credential_replace", "provider type change requires credential replacement", "cdns", index)
+			}
+
+			if operation == credentialOperationKeep {
+				if strings.TrimSpace(existingCDN.CredentialCiphertext) == "" {
+					return nil, nil, bindingCredentialOperationError("credential_not_found_for_keep", "historical credential was not found for keep operation", "cdns", index)
+				}
+				cdn.Credential = ""
+				cdn.CredentialCiphertext = existingCDN.CredentialCiphertext
+				cdn.CredentialOperation = credentialOperationKeep
+				resolvedCDNs = append(resolvedCDNs, cdn)
+				continue
+			}
+		}
+
+		if strings.TrimSpace(cdnCredentialPlaintext(cdn)) == "" {
+			return nil, nil, httpresp.NewAppError(400, "invalid_cdn_binding", "cdn credential is required", map[string]any{
+				"bindingType":  "cdns",
+				"bindingIndex": index,
+				"bindingPath":  fmt.Sprintf("cdns[%d].credential", index),
+			})
+		}
+		cdn.CredentialOperation = credentialOperationReplace
+		resolvedCDNs = append(resolvedCDNs, cdn)
+	}
+
+	return resolvedBuckets, resolvedCDNs, nil
+}
+
+func normalizeCredentialOperation(operation string) string {
+	return strings.ToUpper(strings.TrimSpace(operation))
+}
+
+func isValidCredentialOperation(operation string) bool {
+	return operation == credentialOperationKeep || operation == credentialOperationReplace
+}
+
+func bindingCredentialOperationError(code, message, bindingType string, index int) error {
+	return httpresp.NewAppError(400, code, message, map[string]any{
+		"bindingType":  bindingType,
+		"bindingIndex": index,
+		"bindingPath":  fmt.Sprintf("%s[%d].credentialOperation", bindingType, index),
+	})
+}
+
+func invalidCredentialOperationError(bindingType string, index int, operation string) error {
+	return httpresp.NewAppError(400, "invalid_credential_operation", "credential operation is invalid", map[string]any{
+		"bindingType":         bindingType,
+		"bindingIndex":        index,
+		"bindingPath":         fmt.Sprintf("%s[%d].credentialOperation", bindingType, index),
+		"credentialOperation": operation,
+		"allowedOperations":   []string{credentialOperationKeep, credentialOperationReplace},
+	})
 }
 
 func (s *Service) normalizeBucketsWithProviderDetection(buckets []ProjectBucketInput) ([]ProjectBucketInput, error) {

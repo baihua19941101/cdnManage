@@ -53,24 +53,28 @@ type projectResponse struct {
 }
 
 type projectBucketRequest struct {
+	ID                   uint64 `json:"id"`
 	AccessKeyID          string `json:"accessKeyId"`
 	AccessKeySecret      string `json:"accessKeySecret"`
 	SecurityToken        string `json:"securityToken"`
 	ProviderType         string `json:"providerType"`
 	BucketName           string `json:"bucketName" binding:"required"`
 	Region               string `json:"region"`
+	CredentialOperation  string `json:"credentialOperation"`
 	Credential           string `json:"credential"`
 	CredentialCiphertext string `json:"credentialCiphertext"`
 	IsPrimary            bool   `json:"isPrimary"`
 }
 
 type projectCDNRequest struct {
+	ID                   uint64 `json:"id"`
 	AccessKeyID          string `json:"accessKeyId"`
 	AccessKeySecret      string `json:"accessKeySecret"`
 	SecurityToken        string `json:"securityToken"`
 	ProviderType         string `json:"providerType" binding:"required"`
 	CDNEndpoint          string `json:"cdnEndpoint" binding:"required"`
 	Region               string `json:"region"`
+	CredentialOperation  string `json:"credentialOperation"`
 	Credential           string `json:"credential"`
 	CredentialCiphertext string `json:"credentialCiphertext"`
 	PurgeScope           string `json:"purgeScope"`
@@ -220,10 +224,6 @@ func (h *Handler) Update(ctx *gin.Context) {
 	var req updateProjectRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "invalid update project request", gin.H{"error": err.Error()}))
-		return
-	}
-	if err := validateBucketCredentialRequests(req.Buckets); err != nil {
-		ctx.Error(err)
 		return
 	}
 
@@ -483,9 +483,11 @@ func toProjectBucketInputs(requests []projectBucketRequest) []serviceprojects.Pr
 	result := make([]serviceprojects.ProjectBucketInput, 0, len(requests))
 	for _, bucket := range requests {
 		result = append(result, serviceprojects.ProjectBucketInput{
+			ID:                   bucket.ID,
 			ProviderType:         bucket.ProviderType,
 			BucketName:           bucket.BucketName,
 			Region:               bucket.Region,
+			CredentialOperation:  bucket.CredentialOperation,
 			Credential:           coalesceCredential(bucket.Credential, bucket.AccessKeyID, bucket.AccessKeySecret, bucket.SecurityToken, bucket.Region),
 			CredentialCiphertext: bucket.CredentialCiphertext,
 			IsPrimary:            bucket.IsPrimary,
@@ -508,9 +510,11 @@ func toProjectCDNInputs(requests []projectCDNRequest) []serviceprojects.ProjectC
 	result := make([]serviceprojects.ProjectCDNInput, 0, len(requests))
 	for _, cdn := range requests {
 		result = append(result, serviceprojects.ProjectCDNInput{
+			ID:                   cdn.ID,
 			ProviderType:         cdn.ProviderType,
 			CDNEndpoint:          cdn.CDNEndpoint,
 			Region:               cdn.Region,
+			CredentialOperation:  cdn.CredentialOperation,
 			Credential:           coalesceCredential(cdn.Credential, cdn.AccessKeyID, cdn.AccessKeySecret, cdn.SecurityToken, cdn.Region),
 			CredentialCiphertext: cdn.CredentialCiphertext,
 			PurgeScope:           cdn.PurgeScope,
