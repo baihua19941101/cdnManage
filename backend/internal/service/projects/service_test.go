@@ -1324,7 +1324,7 @@ func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-url-" + suffix + ".example.com",
 			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
-			PurgeScope:   "url",
+			PurgeScope:   "directory",
 			IsPrimary:    true,
 		}},
 	})
@@ -1338,6 +1338,7 @@ func TestServiceRefreshURLsUsesProviderBoundary(t *testing.T) {
 	require.Equal(t, "https://cdn-url-"+suffix+".example.com", cdnProviderStub.lastRefreshURLs.Endpoint)
 	require.Equal(t, []string{"https://cdn.example.com/assets/app.js", "https://cdn.example.com/assets/app.css"}, cdnProviderStub.lastRefreshURLs.URLs)
 	require.Equal(t, "LTAI_TEST", cdnProviderStub.lastRefreshURLs.Credential.AccessKeyID)
+	require.Empty(t, cdnProviderStub.lastRefreshDirectories.Directories)
 }
 
 func TestServiceRefreshDirectoriesUsesProviderBoundary(t *testing.T) {
@@ -1371,7 +1372,7 @@ func TestServiceRefreshDirectoriesUsesProviderBoundary(t *testing.T) {
 			ProviderType: "aliyun",
 			CDNEndpoint:  "https://cdn-directory-" + suffix + ".example.com",
 			Credential:   `{"accessKeyId":"LTAI_TEST","accessKeySecret":"secret"}`,
-			PurgeScope:   "directory",
+			PurgeScope:   "url",
 			IsPrimary:    true,
 		}},
 	})
@@ -1385,6 +1386,7 @@ func TestServiceRefreshDirectoriesUsesProviderBoundary(t *testing.T) {
 	require.Equal(t, "https://cdn-directory-"+suffix+".example.com", cdnProviderStub.lastRefreshDirectories.Endpoint)
 	require.Equal(t, []string{"/assets/", "/images/"}, cdnProviderStub.lastRefreshDirectories.Directories)
 	require.Equal(t, "LTAI_TEST", cdnProviderStub.lastRefreshDirectories.Credential.AccessKeyID)
+	require.Empty(t, cdnProviderStub.lastRefreshURLs.URLs)
 }
 
 func TestServiceSyncResourcesMapsProviderErrors(t *testing.T) {
