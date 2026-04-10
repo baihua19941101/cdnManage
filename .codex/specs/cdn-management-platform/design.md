@@ -307,6 +307,7 @@ upload:
 - `POST /api/v1/projects/:id/cdn/refresh-url`
 - `POST /api/v1/projects/:id/cdn/refresh-directory`
 - `POST /api/v1/projects/:id/cdn/sync`
+- `GET /api/v1/projects/:id/cdns/directories`
 
 Provider 抽象建议：
 
@@ -337,6 +338,9 @@ CDN 操作台页面交互策略（与存储页对齐）：
 - 交互约束
   - URL 刷新、目录刷新、资源同步共用项目与 CDN 选择状态，避免三处重复输入。
   - 资源同步额外要求存储桶下拉有值，不再使用手工输入 BucketName。
+  - 目录刷新支持“目录查询”辅助能力，用户可先查询目录候选再选择目标目录。
+  - `project_read_only` 允许目录查询，但不允许提交 URL 刷新、目录刷新与资源同步写操作。
+  - `project_admin` 与平台管理员允许目录查询与提交刷新/同步写操作。
   - 绑定选项为空时展示只读提示，并禁用对应提交按钮，避免产生无效请求。
   - 表单校验错误需定位到具体字段（项目、CDN 域名、存储桶、URL/目录/路径输入）。
 - 兼容性与边界
@@ -671,6 +675,7 @@ erDiagram
 - 已有绑定项变更 provider 且凭据操作模式为 `KEEP` 时，响应必须返回可定位绑定项的约束错误详情。
 - 绑定项以 `KEEP` 提交但无可用历史凭据时，响应必须返回可定位绑定项的凭据缺失错误详情。
 - 刷新操作语义由刷新接口类型决定，不依赖绑定配置中的 `purgeScope` 值。
+- CDN 目录查询接口必须执行项目作用域校验与项目读权限校验，且在缺少 `projectId` 或 `bucketName` 时返回字段级参数错误。
 - 可见项目列表与项目上下文接口在权限拒绝时必须返回可追踪错误码，并在 `details` 中包含 `projectID` 或权限判定关键信息。
 
 ## Testing Strategy
@@ -694,6 +699,7 @@ erDiagram
 - 压缩包上传会话聚合与耗时计算逻辑
 - 压缩包并发上传的统计一致性与错误聚合逻辑
 - CDN 刷新与资源同步编排逻辑
+- CDN 目录查询接口的项目授权、参数校验与目录聚合逻辑
 
 测试层次：
 
@@ -719,6 +725,7 @@ erDiagram
 - 上传阶段 A/阶段 B 进度切换与轮询终止逻辑
 - 单文件 `key` 与多文件 `keyPrefix` 参数提交与提示文案一致性
 - CDN 操作台的项目/CDN/存储桶下拉联动与三类操作共享上下文行为
+- CDN 页面目录查询交互与 `project_read_only`/`project_admin` 的写入口状态分离行为
 - 三套主题切换是否正确应用
 - 当前目录被删除后返回上一级目录的导航行为
 
@@ -762,3 +769,4 @@ erDiagram
 - Requirement 18: 由 CDN Component 的页面交互策略、前端项目/绑定下拉联动与共享上下文操作编排覆盖
 - Requirement 19: 由 Audit Component 的筛选下拉选项接口、前端平台级与项目级审计筛选联动覆盖
 - Requirement 20: 由 Project Management Component 的 `accessible/context` 接口、ProjectScope 中间件与前端基于项目角色的写权限判定覆盖
+- Requirement 21: 由 CDN Component 的目录查询接口、项目读写权限分离规则与前端目录查询交互覆盖
