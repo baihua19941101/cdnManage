@@ -170,6 +170,8 @@ RBAC 规则：
 - `GET /api/v1/projects/:id`
 - `PUT /api/v1/projects/:id`
 - `DELETE /api/v1/projects/:id`
+- `GET /api/v1/projects/accessible`
+- `GET /api/v1/projects/:id/context`
 
 多云绑定策略：
 
@@ -194,6 +196,16 @@ CDN 绑定字段简化策略（软废弃阶段）：
 - `purgeScope` 从“CDN 绑定配置输入”中移除，刷新语义改由操作接口 `refresh-url` 与 `refresh-directory` 决定。
 - 在软废弃阶段保留 `project_cdns.purge_scope` 字段以兼容历史数据读取与回滚安全，不作为新配置请求的必需输入。
 - 后续硬删除阶段再通过迁移移除 `project_cdns.purge_scope` 与相关兼容代码。
+
+项目可见性与上下文策略：
+
+- 保留 `GET /api/v1/projects` 与 `GET /api/v1/projects/:id` 作为平台管理员管理视图接口。
+- 新增 `GET /api/v1/projects/accessible` 作为“当前用户可见项目列表”接口：
+  - 平台管理员返回全部项目。
+  - 标准用户返回其已绑定项目角色的项目。
+- 新增 `GET /api/v1/projects/:id/context` 作为“项目上下文”接口，至少返回该项目可见的 `buckets` 与 `cdns`，并受项目作用域中间件保护。
+- 存储页与 CDN 操作页优先使用 `accessible + context` 组合加载，不依赖平台管理员管理接口。
+- 写操作按钮状态由“当前项目上下文下的项目角色可写性”决定，而不是仅依据平台角色决定。
 
 #### 4. Storage Component
 
@@ -659,6 +671,7 @@ erDiagram
 - 已有绑定项变更 provider 且凭据操作模式为 `KEEP` 时，响应必须返回可定位绑定项的约束错误详情。
 - 绑定项以 `KEEP` 提交但无可用历史凭据时，响应必须返回可定位绑定项的凭据缺失错误详情。
 - 刷新操作语义由刷新接口类型决定，不依赖绑定配置中的 `purgeScope` 值。
+- 可见项目列表与项目上下文接口在权限拒绝时必须返回可追踪错误码，并在 `details` 中包含 `projectID` 或权限判定关键信息。
 
 ## Testing Strategy
 
@@ -748,3 +761,4 @@ erDiagram
 - Requirement 17: 由 Project Management Component 的 CDN 绑定字段简化策略、CDN 刷新接口语义与前端表单命名/校验规则覆盖
 - Requirement 18: 由 CDN Component 的页面交互策略、前端项目/绑定下拉联动与共享上下文操作编排覆盖
 - Requirement 19: 由 Audit Component 的筛选下拉选项接口、前端平台级与项目级审计筛选联动覆盖
+- Requirement 20: 由 Project Management Component 的 `accessible/context` 接口、ProjectScope 中间件与前端基于项目角色的写权限判定覆盖

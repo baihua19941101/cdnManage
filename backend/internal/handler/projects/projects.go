@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,9 +23,10 @@ import (
 )
 
 type Handler struct {
-	service  *serviceprojects.Service
-	audits   repository.AuditLogRepository
-	recorder *auditservice.Recorder
+	service          *serviceprojects.Service
+	audits           repository.AuditLogRepository
+	userProjectRoles repository.UserProjectRoleRepository
+	recorder         *auditservice.Recorder
 }
 
 const (
@@ -57,6 +59,16 @@ type projectResponse struct {
 	CreatedAt   string                  `json:"createdAt"`
 	Buckets     []projectBucketResponse `json:"buckets,omitempty"`
 	CDNs        []projectCDNResponse    `json:"cdns,omitempty"`
+}
+
+type projectContextResponse struct {
+	ID                 uint64                  `json:"id"`
+	Name               string                  `json:"name"`
+	Description        string                  `json:"description"`
+	CreatedAt          string                  `json:"createdAt"`
+	Buckets            []projectBucketResponse `json:"buckets,omitempty"`
+	CDNs               []projectCDNResponse    `json:"cdns,omitempty"`
+	CurrentProjectRole string                  `json:"currentProjectRole,omitempty"`
 }
 
 type projectBucketRequest struct {
@@ -139,15 +151,20 @@ type bindingCredentialAuditEntry struct {
 	metadata         gin.H
 }
 
-func NewHandler(service *serviceprojects.Service, audits repository.AuditLogRepository) *Handler {
+func NewHandler(service *serviceprojects.Service, audits repository.AuditLogRepository, userProjectRoles repository.UserProjectRoleRepository) *Handler {
 	return &Handler{
-		service:  service,
-		audits:   audits,
-		recorder: auditservice.NewRecorder(audits),
+		service:          service,
+		audits:           audits,
+		userProjectRoles: userProjectRoles,
+		recorder:         auditservice.NewRecorder(audits),
 	}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
+	authenticatedGroup := router.Group("/api/v1/projects")
+	authenticatedGroup.Use(middleware.Authentication(authenticator))
+	authenticatedGroup.GET("/accessible", handler.ListAccessible)
+
 	group := router.Group("/api/v1/projects")
 	group.Use(middleware.Authentication(authenticator))
 	group.Use(middleware.RequirePlatformAdmin())
@@ -164,6 +181,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 		projectGroup.Use(projectScope.Middleware())
 	}
 	projectGroup.GET("/cdns", middleware.RequireProjectRead(), handler.GetCDNs)
+	projectGroup.GET("/context", middleware.RequireProjectRead(), handler.GetContext)
 	projectGroup.PUT("/cdns", middleware.RequireProjectWrite(), handler.UpdateCDNs)
 	projectGroup.POST("/cdns/refresh-url", middleware.RequireProjectWrite(), handler.RefreshURLs)
 	projectGroup.POST("/cdns/refresh-directory", middleware.RequireProjectWrite(), handler.RefreshDirectories)
@@ -184,6 +202,74 @@ func (h *Handler) List(ctx *gin.Context) {
 		response = append(response, toProjectResponse(&project))
 	}
 
+	httpresp.Success(ctx, response)
+}
+
+func (h *Handler) ListAccessible(ctx *gin.Context) {
+	platformRole, ok := middleware.CurrentPlatformRole(ctx)
+	if !ok {
+		ctx.Error(httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authenticated user is required", nil))
+		return
+	}
+
+	keyword := strings.TrimSpace(ctx.Query("name"))
+	keywordLower := strings.ToLower(keyword)
+
+	if model.IsPlatformAdminRole(platformRole) {
+		projects, err := h.service.List(ctx.Request.Context(), repository.ProjectFilter{Name: keyword})
+		if err != nil {
+			ctx.Error(err)
+			return
+		}
+
+		response := make([]projectResponse, 0, len(projects))
+		for _, project := range projects {
+			response = append(response, toProjectResponse(&project))
+		}
+		httpresp.Success(ctx, response)
+		return
+	}
+
+	userID, ok := middleware.CurrentUserID(ctx)
+	if !ok {
+		ctx.Error(httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authenticated user is required", nil))
+		return
+	}
+	if h.userProjectRoles == nil {
+		ctx.Error(httpresp.NewAppError(http.StatusInternalServerError, "internal_error", "user project role repository is not configured", nil))
+		return
+	}
+
+	bindings, err := h.userProjectRoles.ListByUserID(ctx.Request.Context(), userID)
+	if err != nil {
+		ctx.Error(httpresp.NewAppError(http.StatusInternalServerError, "internal_error", "list accessible projects failed", nil))
+		return
+	}
+
+	projectMap := make(map[uint64]model.Project, len(bindings))
+	for _, binding := range bindings {
+		project := binding.Project
+		if project.ID == 0 {
+			continue
+		}
+		if keywordLower != "" && !strings.Contains(strings.ToLower(project.Name), keywordLower) {
+			continue
+		}
+		projectMap[project.ID] = project
+	}
+
+	projects := make([]model.Project, 0, len(projectMap))
+	for _, project := range projectMap {
+		projects = append(projects, project)
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].ID > projects[j].ID
+	})
+
+	response := make([]projectResponse, 0, len(projects))
+	for _, project := range projects {
+		response = append(response, toProjectResponse(&project))
+	}
 	httpresp.Success(ctx, response)
 }
 
@@ -302,6 +388,32 @@ func (h *Handler) GetCDNs(ctx *gin.Context) {
 	}
 
 	httpresp.Success(ctx, gin.H{"cdns": response})
+}
+
+func (h *Handler) GetContext(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	project, err := h.service.GetByID(ctx.Request.Context(), projectID)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	projectRole, _ := middleware.CurrentProjectRole(ctx)
+	basic := toProjectResponse(project)
+	httpresp.Success(ctx, projectContextResponse{
+		ID:                 basic.ID,
+		Name:               basic.Name,
+		Description:        basic.Description,
+		CreatedAt:          basic.CreatedAt,
+		Buckets:            basic.Buckets,
+		CDNs:               basic.CDNs,
+		CurrentProjectRole: projectRole,
+	})
 }
 
 func (h *Handler) UpdateCDNs(ctx *gin.Context) {

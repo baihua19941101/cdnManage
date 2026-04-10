@@ -61,6 +61,7 @@ type ProjectOption = {
 
 type ProjectDetail = {
   id: number
+  currentProjectRole?: 'project_admin' | 'project_read_only'
   buckets?: Array<{
     bucketName: string
   }>
@@ -717,7 +718,9 @@ export function StoragePage() {
   const [queryForm] = Form.useForm<QueryFormValues>()
   const [renameForm] = Form.useForm<RenameFormValues>()
   const platformRole = useAuthStore((state) => state.user?.platformRole)
-  const canWrite = isPlatformAdminRole(platformRole)
+  const isPlatformAdmin = isPlatformAdminRole(platformRole)
+  const [currentProjectRole, setCurrentProjectRole] = useState<'project_admin' | 'project_read_only' | ''>('')
+  const canWrite = isPlatformAdmin || currentProjectRole === 'project_admin'
 
   const [objects, setObjects] = useState<ObjectItem[]>([])
   const [currentPrefix, setCurrentPrefix] = useState('')
@@ -885,7 +888,7 @@ export function StoragePage() {
   const loadProjectOptions = async () => {
     setProjectOptionsLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects')
+      const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects/accessible')
       const items = Array.isArray(response.data.data) ? response.data.data : []
       setProjectOptions(items)
     } catch (error) {
@@ -898,6 +901,7 @@ export function StoragePage() {
 
   const loadBucketsByProject = async (projectID: number) => {
     if (!Number.isFinite(projectID) || projectID <= 0) {
+      setCurrentProjectRole('')
       setBucketOptions([])
       queryForm.setFieldValue('bucketName', '')
       queryForm.setFieldValue('prefix', '')
@@ -905,10 +909,13 @@ export function StoragePage() {
       return
     }
 
+    setCurrentProjectRole('')
     setBucketOptionsLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<ProjectDetail>>(`/projects/${projectID}`)
+      const response = await apiClient.get<ApiResponse<ProjectDetail>>(`/projects/${projectID}/context`)
       const project = response.data.data
+      const role = project?.currentProjectRole?.trim()
+      setCurrentProjectRole(role === 'project_admin' || role === 'project_read_only' ? role : '')
       const names =
         Array.isArray(project?.buckets)
           ? project.buckets
@@ -921,6 +928,7 @@ export function StoragePage() {
       setCurrentPrefix('')
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '项目存储桶加载失败。'))
+      setCurrentProjectRole('')
       setBucketOptions([])
       queryForm.setFieldValue('bucketName', '')
       queryForm.setFieldValue('prefix', '')

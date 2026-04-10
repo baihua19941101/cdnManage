@@ -52,6 +52,7 @@ func New() (*Application, error) {
 
 	store := repository.NewGormStore(db)
 	txManager := repository.NewGormTxManager(db)
+	userProjectRoleCache := middleware.NewRedisUserProjectRoleCache(newRedisAdapter(redisClient))
 	auditRecorder := auditservice.NewRecorder(store.AuditLogs())
 	bootstrapService := bootstrap.NewService(
 		store.Users(),
@@ -73,6 +74,7 @@ func New() (*Application, error) {
 		store.Users(),
 		store.Projects(),
 		txManager,
+		userProjectRoleCache,
 	)
 	userHandler := userhandler.NewHandler(userService, store.AuditLogs())
 	projectService := serviceprojects.NewService(
@@ -97,14 +99,14 @@ func New() (*Application, error) {
 		return nil, fmt.Errorf("register tencent cdn provider: %w", err)
 	}
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
-	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
+	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs(), store.UserProjectRoles())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs(), cfg.Upload.MaxFileSizeMB, cfg.Upload.ArchiveParallelism, cfg.Upload.FileParallelism)
 	auditHandler := audithandler.NewHandler(store.AuditLogs(), store.Projects(), store.UserProjectRoles())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
 		store.UserProjectRoles(),
-		middleware.NewRedisUserProjectRoleCache(newRedisAdapter(redisClient)),
+		userProjectRoleCache,
 		5*time.Minute,
 	).WithAuditor(accessDeniedAuditor)
 
@@ -150,4 +152,8 @@ func (a *redisAdapter) Get(ctx context.Context, key string) (string, error) {
 
 func (a *redisAdapter) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	return a.client.Set(ctx, key, value, expiration).Err()
+}
+
+func (a *redisAdapter) Delete(ctx context.Context, key string) error {
+	return a.client.Del(ctx, key).Err()
 }
