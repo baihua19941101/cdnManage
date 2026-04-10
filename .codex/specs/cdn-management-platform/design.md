@@ -338,11 +338,27 @@ CDN 操作台页面交互策略（与存储页对齐）：
 - 记录关键业务操作
 - 支持按项目、用户、操作类型、时间范围筛选
 - 按角色限制可见范围
+- 支持平台级与项目级审计筛选下拉选项加载与联动查询
 
 主要接口：
 
 - `GET /api/v1/audits`
 - `GET /api/v1/projects/:id/audits`
+- `GET /api/v1/audits/filter-options`
+- `GET /api/v1/projects/:id/audits/filter-options`
+
+审计筛选交互策略：
+
+- 平台级审计查询页
+  - `Action` 与 `Target Type` 使用下拉筛选，不再依赖手工输入。
+  - 下拉选项由平台级筛选选项接口返回，前端支持可清空与可搜索。
+- 项目级审计查询页
+  - `Project ID`、`Action`、`Target Type` 使用下拉筛选。
+  - `Project ID` 下拉仅展示当前用户可见项目，并展示 `projectId + projectName` 组合标签。
+  - 选中项目后，`Action` 与 `Target Type` 支持按项目上下文联动加载。
+- 空状态与容错
+  - 任一下拉维度无可选值时显示可读提示并保留查询入口。
+  - 清空任一下拉值时移除对应查询参数，回退为该维度非限制查询。
 
 审计写入范围：
 
@@ -731,3 +747,4 @@ erDiagram
 - Requirement 16: 由 Project Management Component 的绑定项凭据策略、错误处理规则与前端项目编辑交互覆盖
 - Requirement 17: 由 Project Management Component 的 CDN 绑定字段简化策略、CDN 刷新接口语义与前端表单命名/校验规则覆盖
 - Requirement 18: 由 CDN Component 的页面交互策略、前端项目/绑定下拉联动与共享上下文操作编排覆盖
+- Requirement 19: 由 Audit Component 的筛选下拉选项接口、前端平台级与项目级审计筛选联动覆盖
