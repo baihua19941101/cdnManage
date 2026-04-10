@@ -53,6 +53,22 @@ type PlatformAuditFilterOptions = {
   targetTypes?: string[]
 }
 
+type ProjectAuditFilterProjectOption = {
+  projectId: number
+  projectName: string
+}
+
+type ProjectAuditFilterOptions = {
+  projects?: ProjectAuditFilterProjectOption[]
+  actions?: string[]
+  targetTypes?: string[]
+}
+
+type ProjectSummary = {
+  id: number
+  name: string
+}
+
 type QueryFormValues = {
   scope: QueryScope
   projectId?: string
@@ -115,8 +131,53 @@ export function AuditsPage() {
   const [platformTargetTypes, setPlatformTargetTypes] = useState<string[]>([])
   const [platformFilterOptionsLoading, setPlatformFilterOptionsLoading] = useState(false)
   const [platformFilterOptionsError, setPlatformFilterOptionsError] = useState<string | null>(null)
+  const [projectOptions, setProjectOptions] = useState<ProjectAuditFilterProjectOption[]>([])
+  const [projectActions, setProjectActions] = useState<string[]>([])
+  const [projectTargetTypes, setProjectTargetTypes] = useState<string[]>([])
+  const [projectFilterOptionsLoading, setProjectFilterOptionsLoading] = useState(false)
+  const [projectFilterOptionsError, setProjectFilterOptionsError] = useState<string | null>(null)
 
   const scope = Form.useWatch('scope', queryForm) ?? 'platform'
+  const selectedProjectID = Form.useWatch('projectId', queryForm)
+
+  const toNonEmptyStrings = (input: unknown): string[] =>
+    Array.isArray(input)
+      ? input.filter((option): option is string => typeof option === 'string' && option.trim().length > 0)
+      : []
+
+  const loadProjectList = async () => {
+    setProjectFilterOptionsError(null)
+    try {
+      const response = await apiClient.get<ApiResponse<ProjectSummary[]>>('/projects')
+      const items = Array.isArray(response.data.data) ? response.data.data : []
+      const projects = items
+        .filter((item) => Number.isFinite(item.id) && item.id > 0)
+        .map((item) => ({
+          projectId: item.id,
+          projectName: item.name?.trim() || `Project-${item.id}`,
+        }))
+      setProjectOptions(projects)
+      const currentProjectID = queryForm.getFieldValue('projectId')
+      if (
+        typeof currentProjectID === 'string' &&
+        currentProjectID.trim().length > 0 &&
+        !projects.some((project) => String(project.projectId) === currentProjectID)
+      ) {
+        queryForm.setFieldsValue({
+          projectId: '',
+          action: undefined,
+          targetType: undefined,
+        })
+        setProjectActions([])
+        setProjectTargetTypes([])
+      }
+    } catch (error) {
+      setProjectOptions([])
+      setProjectActions([])
+      setProjectTargetTypes([])
+      setProjectFilterOptionsError(resolveAPIErrorMessage(error, '项目级审计筛选项目列表加载失败。'))
+    }
+  }
 
   useEffect(() => {
     if (!canQueryPlatformScope) {
@@ -136,16 +197,8 @@ export function AuditsPage() {
         const response = await apiClient.get<ApiResponse<PlatformAuditFilterOptions>>(
           '/audits/filter-options',
         )
-        const actions = Array.isArray(response.data.data?.actions)
-          ? response.data.data.actions.filter(
-              (option): option is string => typeof option === 'string' && option.trim().length > 0,
-            )
-          : []
-        const targetTypes = Array.isArray(response.data.data?.targetTypes)
-          ? response.data.data.targetTypes.filter(
-              (option): option is string => typeof option === 'string' && option.trim().length > 0,
-            )
-          : []
+        const actions = toNonEmptyStrings(response.data.data?.actions)
+        const targetTypes = toNonEmptyStrings(response.data.data?.targetTypes)
         setPlatformActions(actions)
         setPlatformTargetTypes(targetTypes)
       } catch (error) {
@@ -161,6 +214,77 @@ export function AuditsPage() {
 
     void loadPlatformFilterOptions()
   }, [canQuery, canQueryPlatformScope, scope])
+
+  useEffect(() => {
+    const bootstrapProjectScope = async () => {
+      if (!canQuery || scope !== 'project') {
+        return
+      }
+      await loadProjectList()
+    }
+
+    void bootstrapProjectScope()
+  }, [canQuery, scope])
+
+  useEffect(() => {
+    const loadProjectScopedFilterOptions = async () => {
+      if (!canQuery || scope !== 'project') {
+        return
+      }
+      const projectID = Number(selectedProjectID)
+      if (!Number.isFinite(projectID) || projectID <= 0) {
+        setProjectActions([])
+        setProjectTargetTypes([])
+        setProjectFilterOptionsError(null)
+        return
+      }
+
+      setProjectFilterOptionsLoading(true)
+      setProjectFilterOptionsError(null)
+      try {
+        const response = await apiClient.get<ApiResponse<ProjectAuditFilterOptions>>(
+          `/projects/${projectID}/audits/filter-options`,
+        )
+        const actions = toNonEmptyStrings(response.data.data?.actions)
+        const targetTypes = toNonEmptyStrings(response.data.data?.targetTypes)
+        const projects = Array.isArray(response.data.data?.projects)
+          ? response.data.data.projects.filter(
+              (project): project is ProjectAuditFilterProjectOption =>
+                Number.isFinite(project.projectId) && project.projectId > 0,
+            )
+          : []
+
+        if (projects.length > 0) {
+          setProjectOptions(projects)
+        }
+        setProjectActions(actions)
+        setProjectTargetTypes(targetTypes)
+
+        const currentAction = queryForm.getFieldValue('action')
+        if (typeof currentAction === 'string' && currentAction.trim().length > 0 && !actions.includes(currentAction)) {
+          queryForm.setFieldValue('action', undefined)
+        }
+        const currentTargetType = queryForm.getFieldValue('targetType')
+        if (
+          typeof currentTargetType === 'string' &&
+          currentTargetType.trim().length > 0 &&
+          !targetTypes.includes(currentTargetType)
+        ) {
+          queryForm.setFieldValue('targetType', undefined)
+        }
+      } catch (error) {
+        setProjectActions([])
+        setProjectTargetTypes([])
+        setProjectFilterOptionsError(
+          resolveAPIErrorMessage(error, '项目级审计筛选选项加载失败，可直接查询全部日志。'),
+        )
+      } finally {
+        setProjectFilterOptionsLoading(false)
+      }
+    }
+
+    void loadProjectScopedFilterOptions()
+  }, [canQuery, scope, selectedProjectID, queryForm])
 
   const submitQuery = async () => {
     if (!canQuery) {
@@ -291,12 +415,38 @@ export function AuditsPage() {
               <Form.Item
                 name="projectId"
                 label="Project ID"
-                rules={[
-                  { required: true, message: '请输入 Project ID' },
-                  { pattern: /^[1-9]\d*$/, message: 'Project ID 必须是正整数' },
-                ]}
+                rules={[{ required: true, message: '请选择 Project ID' }]}
               >
-                <Input placeholder="例如 42" style={{ width: 150 }} />
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="请选择或搜索 Project ID"
+                  style={{ width: 280 }}
+                  options={projectOptions.map((project) => ({
+                    value: String(project.projectId),
+                    label: `${project.projectId} - ${project.projectName}`,
+                  }))}
+                  filterOption={(input, option) =>
+                    String(option?.label ?? '')
+                      .toLowerCase()
+                      .includes(input.toLowerCase())
+                  }
+                  onChange={(value) => {
+                    if (!value) {
+                      setProjectActions([])
+                      setProjectTargetTypes([])
+                    }
+                    queryForm.setFieldsValue({
+                      action: undefined,
+                      targetType: undefined,
+                    })
+                  }}
+                  onOpenChange={(open) => {
+                    if (open && projectOptions.length === 0) {
+                      void loadProjectList()
+                    }
+                  }}
+                />
               </Form.Item>
             ) : null}
 
@@ -314,7 +464,19 @@ export function AuditsPage() {
               </Form.Item>
             ) : (
               <Form.Item name="action" label="Action">
-                <Input placeholder="例如 object.upload" style={{ width: 190 }} />
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="全部 Action"
+                  style={{ width: 220 }}
+                  loading={projectFilterOptionsLoading}
+                  options={projectActions.map((value) => ({ label: value, value }))}
+                  notFoundContent={
+                    selectedProjectID
+                      ? '暂无可选 Action，可直接查询全部。'
+                      : '请先选择 Project ID。'
+                  }
+                />
               </Form.Item>
             )}
 
@@ -345,7 +507,19 @@ export function AuditsPage() {
               </Form.Item>
             ) : (
               <Form.Item name="targetType" label="Target Type">
-                <Input placeholder="例如 object / cdn / project" style={{ width: 210 }} />
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="全部 Target Type"
+                  style={{ width: 220 }}
+                  loading={projectFilterOptionsLoading}
+                  options={projectTargetTypes.map((value) => ({ label: value, value }))}
+                  notFoundContent={
+                    selectedProjectID
+                      ? '暂无可选 Target Type，可直接查询全部。'
+                      : '请先选择 Project ID。'
+                  }
+                />
               </Form.Item>
             )}
 
@@ -407,6 +581,26 @@ export function AuditsPage() {
           ) : null}
           {scope === 'platform' && platformFilterOptionsError ? (
             <Alert type="warning" showIcon style={{ marginTop: 12 }} message={platformFilterOptionsError} />
+          ) : null}
+          {scope === 'project' &&
+          selectedProjectID &&
+          !projectFilterOptionsLoading &&
+          !projectFilterOptionsError ? (
+            <>
+              {projectActions.length === 0 ? (
+                <Typography.Text type="secondary">
+                  当前项目暂无 Action 可选值，可直接查询全部日志。
+                </Typography.Text>
+              ) : null}
+              {projectTargetTypes.length === 0 ? (
+                <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+                  当前项目暂无 Target Type 可选值，可直接查询全部日志。
+                </Typography.Text>
+              ) : null}
+            </>
+          ) : null}
+          {scope === 'project' && projectFilterOptionsError ? (
+            <Alert type="warning" showIcon style={{ marginTop: 12 }} message={projectFilterOptionsError} />
           ) : null}
         </Card>
 

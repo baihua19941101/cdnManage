@@ -455,7 +455,7 @@
     - 将 Action 与 Target Type 从手工输入改为可搜索下拉并支持清空
     - 下拉选项为空时展示可读提示并保持查询按钮可用
     - _Requirements: 19.1, 19.4, 19.5_
-  - [ ] 24.3 改造项目级审计查询表单为下拉筛选
+  - [x] 24.3 改造项目级审计查询表单为下拉筛选
     - 将 Project ID、Action、Target Type 改为可搜索下拉并支持清空
     - Project ID 选项展示 `projectId + projectName`，并在切换项目时联动更新 Action 与 Target Type 选项
     - _Requirements: 19.2, 19.3, 19.5_
