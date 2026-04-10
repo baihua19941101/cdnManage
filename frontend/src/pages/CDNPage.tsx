@@ -12,7 +12,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -49,6 +49,7 @@ type ProjectOption = {
 
 type ProjectDetail = {
   id: number
+  currentProjectRole?: 'project_admin' | 'project_read_only'
   buckets?: Array<{
     bucketName: string
     isPrimary?: boolean
@@ -75,7 +76,7 @@ const OPERATION_META: Record<
     emptyInputMessage: string
     successMessage: string
     errorMessage: string
-    icon: JSX.Element
+    icon: ReactNode
   }
 > = {
   url: {
@@ -165,7 +166,9 @@ export function CDNPage() {
   const [baseForm] = Form.useForm<BaseFormValues>()
   const [operationForm] = Form.useForm<{ operationInput: string }>()
   const platformRole = useAuthStore((state) => state.user?.platformRole)
-  const canWrite = isPlatformAdminRole(platformRole)
+  const isPlatformAdmin = isPlatformAdminRole(platformRole)
+  const [currentProjectRole, setCurrentProjectRole] = useState<'project_admin' | 'project_read_only' | ''>('')
+  const canWrite = isPlatformAdmin || currentProjectRole === 'project_admin'
 
   const [submitting, setSubmitting] = useState(false)
   const [activeOperation, setActiveOperation] = useState<OperationType>('url')
@@ -229,7 +232,7 @@ export function CDNPage() {
   const loadProjectOptions = async () => {
     setProjectOptionsLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects')
+      const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects/accessible')
       const items = Array.isArray(response.data.data) ? response.data.data : []
       setProjectOptions(items)
     } catch (error) {
@@ -242,6 +245,7 @@ export function CDNPage() {
 
   const loadBindingsByProject = async (projectID: number) => {
     if (!Number.isFinite(projectID) || projectID <= 0) {
+      setCurrentProjectRole('')
       setCDNOptions([])
       setBucketOptions([])
       baseForm.setFieldsValue({
@@ -251,10 +255,13 @@ export function CDNPage() {
       return
     }
 
+    setCurrentProjectRole('')
     setBindingsLoading(true)
     try {
-      const response = await apiClient.get<ApiResponse<ProjectDetail>>(`/projects/${projectID}`)
+      const response = await apiClient.get<ApiResponse<ProjectDetail>>(`/projects/${projectID}/context`)
       const project = response.data.data
+      const role = project?.currentProjectRole?.trim()
+      setCurrentProjectRole(role === 'project_admin' || role === 'project_read_only' ? role : '')
       const cdnList =
         Array.isArray(project?.cdns)
           ? project.cdns
@@ -282,6 +289,7 @@ export function CDNPage() {
         bucketName: nextBucket,
       })
     } catch (error) {
+      setCurrentProjectRole('')
       setCDNOptions([])
       setBucketOptions([])
       baseForm.setFieldsValue({

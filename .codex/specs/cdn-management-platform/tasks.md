@@ -466,3 +466,24 @@
   - [ ]* 24.5 为审计筛选下拉改造补充最小化自动化测试
     - 覆盖平台级 Action/Target Type 下拉筛选、项目级 Project ID/Action/Target Type 联动、清空筛选后的参数回退与空选项提示
     - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5_
+
+- [ ] 25. 修复项目角色用户在存储与 CDN 页面不可见不可操作问题（新需求）
+  - [x] 25.1 新增“当前用户可见项目列表”与“项目上下文”后端接口
+    - 新增 `GET /api/v1/projects/accessible`，平台管理员返回全部项目，标准用户返回已绑定项目
+    - 新增 `GET /api/v1/projects/:id/context`，返回项目 `buckets` 与 `cdns`，并通过项目作用域校验
+    - _Requirements: 20.1, 20.2, 20.3, 20.5_
+  - [x] 25.2 调整前端 Storage 页面改用可见项目与项目上下文接口
+    - 项目下拉改为加载 `accessible` 列表
+    - Bucket 选项改为从 `context` 加载，避免依赖平台管理员接口
+    - _Requirements: 20.1, 20.3, 18.1, 18.3_
+  - [x] 25.3 调整前端 CDN 页面改用可见项目与项目上下文接口
+    - 项目下拉改为加载 `accessible` 列表
+    - CDN 与 Bucket 选项改为从 `context` 加载，保证项目角色用户可见
+    - _Requirements: 20.1, 20.3, 18.1, 18.2, 18.3_
+  - [x] 25.4 修正前端写权限判定为“项目角色 + 平台角色联合判定”
+    - 页面写操作按钮不再仅依据 `platformRole` 判定
+    - 对 `project_admin` 放开项目写操作，对 `project_read_only` 保持只读
+    - _Requirements: 20.4, 4.2, 4.5, 8.2_
+  - [ ]* 25.5 为项目角色可见性与写权限修复补充最小化自动化测试
+    - 覆盖标准用户可见项目加载、项目上下文授权拒绝、Storage/CDN 页面对项目管理员与项目只读用户的写入口状态
+    - _Requirements: 20.1, 20.3, 20.4, 20.5_

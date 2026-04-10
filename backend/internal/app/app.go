@@ -97,7 +97,7 @@ func New() (*Application, error) {
 		return nil, fmt.Errorf("register tencent cdn provider: %w", err)
 	}
 	projectService.ConfigureSyncTaskStatusCache(serviceprojects.NewRedisSyncTaskStatusCache(newRedisAdapter(redisClient)), 10*time.Minute)
-	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs())
+	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs(), store.UserProjectRoles())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs(), cfg.Upload.MaxFileSizeMB, cfg.Upload.ArchiveParallelism, cfg.Upload.FileParallelism)
 	auditHandler := audithandler.NewHandler(store.AuditLogs(), store.Projects(), store.UserProjectRoles())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
