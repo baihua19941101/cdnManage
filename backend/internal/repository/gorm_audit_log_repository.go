@@ -62,3 +62,30 @@ func (r *gormAuditLogRepository) List(ctx context.Context, filter AuditLogFilter
 	}
 	return logs, nil
 }
+
+func (r *gormAuditLogRepository) ListDistinctActions(ctx context.Context, projectID *uint64) ([]string, error) {
+	return r.listDistinctValues(ctx, "action", projectID)
+}
+
+func (r *gormAuditLogRepository) ListDistinctTargetTypes(ctx context.Context, projectID *uint64) ([]string, error) {
+	return r.listDistinctValues(ctx, "target_type", projectID)
+}
+
+func (r *gormAuditLogRepository) listDistinctValues(ctx context.Context, column string, projectID *uint64) ([]string, error) {
+	query := r.db.WithContext(ctx).
+		Model(&model.AuditLog{}).
+		Where(column+" <> ''")
+	if projectID != nil {
+		query = query.Where("project_id = ?", *projectID)
+	}
+
+	var values []string
+	if err := query.
+		Distinct(column).
+		Order(column + " asc").
+		Pluck(column, &values).Error; err != nil {
+		return nil, err
+	}
+
+	return values, nil
+}

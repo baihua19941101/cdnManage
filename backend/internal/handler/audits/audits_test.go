@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -22,7 +23,7 @@ func TestListPlatformAuditLogsAllowsPlatformAdmin(t *testing.T) {
 			{BaseModel: model.BaseModel{ID: 2}, ActorUserID: 1002, Action: "cdn.refresh_url", TargetType: "cdn", TargetIdentifier: "cdn.example.com", Result: model.AuditResultSuccess, RequestID: "req-2"},
 		},
 	}
-	handler := NewHandler(repo)
+	handler := NewHandler(repo, nil, nil)
 	router := newAuditTestRouter()
 	router.GET("/api/v1/audits", injectIdentity(model.PlatformRoleAdmin, 9001), middleware.RequirePlatformAdmin(), handler.ListPlatformAuditLogs)
 
@@ -43,7 +44,7 @@ func TestListProjectAuditLogsAllowsProjectAdminWithinScope(t *testing.T) {
 			{BaseModel: model.BaseModel{ID: 2}, ActorUserID: 1002, ProjectID: uint64Pointer(99), Action: "object.delete", TargetType: "object", TargetIdentifier: "assets/old.js", Result: model.AuditResultSuccess, RequestID: "req-2"},
 		},
 	}
-	handler := NewHandler(repo)
+	handler := NewHandler(repo, nil, nil)
 	router := newAuditTestRouter()
 	router.GET("/api/v1/projects/:id/audits",
 		injectIdentity(model.PlatformRoleStandard, 9002),
@@ -62,7 +63,7 @@ func TestListProjectAuditLogsAllowsProjectAdminWithinScope(t *testing.T) {
 }
 
 func TestListProjectAuditLogsDeniesProjectReadOnlyUser(t *testing.T) {
-	handler := NewHandler(&memoryAuditLogRepository{})
+	handler := NewHandler(&memoryAuditLogRepository{}, nil, nil)
 	router := newAuditTestRouter()
 	router.GET("/api/v1/projects/:id/audits",
 		injectIdentity(model.PlatformRoleStandard, 9003),
@@ -106,7 +107,7 @@ func TestListProjectAuditLogsFiltersBySessionID(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(repo)
+	handler := NewHandler(repo, nil, nil)
 	router := newAuditTestRouter()
 	router.GET("/api/v1/projects/:id/audits",
 		injectIdentity(model.PlatformRoleStandard, 9004),
@@ -122,6 +123,88 @@ func TestListProjectAuditLogsFiltersBySessionID(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.NotContains(t, recorder.Body.String(), `"id":1`)
 	require.Contains(t, recorder.Body.String(), `"id":2`)
+}
+
+func TestGetPlatformAuditFilterOptionsReturnsDistinctValues(t *testing.T) {
+	repo := &memoryAuditLogRepository{
+		logs: []model.AuditLog{
+			{Action: "object.upload", TargetType: "object"},
+			{Action: "object.upload", TargetType: "object"},
+			{Action: "cdn.refresh_url", TargetType: "cdn"},
+			{Action: "project.update", TargetType: "project"},
+		},
+	}
+	handler := NewHandler(repo, nil, nil)
+	router := newAuditTestRouter()
+	router.GET("/api/v1/audits/filter-options", injectIdentity(model.PlatformRoleAdmin, 9005), middleware.RequirePlatformAdmin(), handler.GetPlatformAuditFilterOptions)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/audits/filter-options", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"actions":["cdn.refresh_url","object.upload","project.update"]`)
+	require.Contains(t, recorder.Body.String(), `"targetTypes":["cdn","object","project"]`)
+}
+
+func TestGetProjectAuditFilterOptionsReturnsProjectScopedValuesAndWritableProjects(t *testing.T) {
+	currentProjectID := uint64(42)
+	repo := &memoryAuditLogRepository{
+		logs: []model.AuditLog{
+			{ProjectID: uint64Pointer(42), Action: "object.upload", TargetType: "object"},
+			{ProjectID: uint64Pointer(42), Action: "cdn.refresh_url", TargetType: "cdn"},
+			{ProjectID: uint64Pointer(99), Action: "user.reset_password", TargetType: "user"},
+		},
+	}
+	projects := &memoryProjectRepository{
+		projects: []model.Project{
+			{BaseModel: model.BaseModel{ID: 42}, Name: "Project-A"},
+			{BaseModel: model.BaseModel{ID: 43}, Name: "Project-B"},
+			{BaseModel: model.BaseModel{ID: 99}, Name: "Project-C"},
+		},
+	}
+	roles := &memoryUserProjectRoleRepository{
+		roles: []model.UserProjectRole{
+			{UserID: 9006, ProjectID: 42, ProjectRole: model.ProjectRoleAdmin},
+			{UserID: 9006, ProjectID: 43, ProjectRole: model.ProjectRoleAdmin},
+			{UserID: 9006, ProjectID: 99, ProjectRole: model.ProjectRoleReadOnly},
+		},
+	}
+	handler := NewHandler(repo, projects, roles)
+	router := newAuditTestRouter()
+	router.GET("/api/v1/projects/:id/audits/filter-options",
+		injectIdentity(model.PlatformRoleStandard, 9006),
+		injectProjectScope(currentProjectID, model.ProjectRoleAdmin),
+		middleware.RequireProjectWrite(),
+		handler.GetProjectAuditFilterOptions,
+	)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/projects/42/audits/filter-options", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"actions":["cdn.refresh_url","object.upload"]`)
+	require.Contains(t, recorder.Body.String(), `"targetTypes":["cdn","object"]`)
+	require.Contains(t, recorder.Body.String(), `"projects":[{"projectId":43,"projectName":"Project-B"},{"projectId":42,"projectName":"Project-A"}]`)
+	require.NotContains(t, recorder.Body.String(), `"projectId":99`)
+}
+
+func TestGetProjectAuditFilterOptionsDeniesProjectReadOnlyUser(t *testing.T) {
+	handler := NewHandler(&memoryAuditLogRepository{}, &memoryProjectRepository{}, &memoryUserProjectRoleRepository{})
+	router := newAuditTestRouter()
+	router.GET("/api/v1/projects/:id/audits/filter-options",
+		injectIdentity(model.PlatformRoleStandard, 9007),
+		injectProjectScope(52, model.ProjectRoleReadOnly),
+		middleware.RequireProjectWrite(),
+		handler.GetProjectAuditFilterOptions,
+	)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/projects/52/audits/filter-options", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
 }
 
 func newAuditTestRouter() *gin.Engine {
@@ -177,6 +260,63 @@ func (r *memoryAuditLogRepository) List(_ context.Context, filter repository.Aud
 			}
 		}
 		result = append(result, log)
+	}
+	return result, nil
+}
+
+func (r *memoryAuditLogRepository) ListDistinctActions(_ context.Context, projectID *uint64) ([]string, error) {
+	return r.listDistinctByField(projectID, func(log model.AuditLog) string { return log.Action }), nil
+}
+
+func (r *memoryAuditLogRepository) ListDistinctTargetTypes(_ context.Context, projectID *uint64) ([]string, error) {
+	return r.listDistinctByField(projectID, func(log model.AuditLog) string { return log.TargetType }), nil
+}
+
+func (r *memoryAuditLogRepository) listDistinctByField(projectID *uint64, selector func(model.AuditLog) string) []string {
+	values := make(map[string]struct{})
+	for _, log := range r.logs {
+		if projectID != nil {
+			if log.ProjectID == nil || *log.ProjectID != *projectID {
+				continue
+			}
+		}
+		value := selector(log)
+		if value == "" {
+			continue
+		}
+		values[value] = struct{}{}
+	}
+
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+type memoryProjectRepository struct {
+	projects []model.Project
+}
+
+func (r *memoryProjectRepository) List(_ context.Context, _ repository.ProjectFilter) ([]model.Project, error) {
+	result := make([]model.Project, 0, len(r.projects))
+	for _, project := range r.projects {
+		result = append(result, project)
+	}
+	return result, nil
+}
+
+type memoryUserProjectRoleRepository struct {
+	roles []model.UserProjectRole
+}
+
+func (r *memoryUserProjectRoleRepository) ListByUserID(_ context.Context, userID uint64) ([]model.UserProjectRole, error) {
+	result := make([]model.UserProjectRole, 0)
+	for _, role := range r.roles {
+		if role.UserID == userID {
+			result = append(result, role)
+		}
 	}
 	return result, nil
 }
