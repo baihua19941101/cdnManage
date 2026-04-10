@@ -48,6 +48,11 @@ type ApiResponse<T> = {
   data: T
 }
 
+type PlatformAuditFilterOptions = {
+  actions?: string[]
+  targetTypes?: string[]
+}
+
 type QueryFormValues = {
   scope: QueryScope
   projectId?: string
@@ -106,6 +111,10 @@ export function AuditsPage() {
   const [queryError, setQueryError] = useState<string | null>(null)
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [hasSearched, setHasSearched] = useState(false)
+  const [platformActions, setPlatformActions] = useState<string[]>([])
+  const [platformTargetTypes, setPlatformTargetTypes] = useState<string[]>([])
+  const [platformFilterOptionsLoading, setPlatformFilterOptionsLoading] = useState(false)
+  const [platformFilterOptionsError, setPlatformFilterOptionsError] = useState<string | null>(null)
 
   const scope = Form.useWatch('scope', queryForm) ?? 'platform'
 
@@ -114,6 +123,44 @@ export function AuditsPage() {
       queryForm.setFieldValue('scope', 'project')
     }
   }, [canQueryPlatformScope, queryForm])
+
+  useEffect(() => {
+    const loadPlatformFilterOptions = async () => {
+      if (!canQuery || !canQueryPlatformScope || scope !== 'platform') {
+        return
+      }
+
+      setPlatformFilterOptionsLoading(true)
+      setPlatformFilterOptionsError(null)
+      try {
+        const response = await apiClient.get<ApiResponse<PlatformAuditFilterOptions>>(
+          '/audits/filter-options',
+        )
+        const actions = Array.isArray(response.data.data?.actions)
+          ? response.data.data.actions.filter(
+              (option): option is string => typeof option === 'string' && option.trim().length > 0,
+            )
+          : []
+        const targetTypes = Array.isArray(response.data.data?.targetTypes)
+          ? response.data.data.targetTypes.filter(
+              (option): option is string => typeof option === 'string' && option.trim().length > 0,
+            )
+          : []
+        setPlatformActions(actions)
+        setPlatformTargetTypes(targetTypes)
+      } catch (error) {
+        setPlatformActions([])
+        setPlatformTargetTypes([])
+        setPlatformFilterOptionsError(
+          resolveAPIErrorMessage(error, '审计筛选选项加载失败，可直接查询全部日志。'),
+        )
+      } finally {
+        setPlatformFilterOptionsLoading(false)
+      }
+    }
+
+    void loadPlatformFilterOptions()
+  }, [canQuery, canQueryPlatformScope, scope])
 
   const submitQuery = async () => {
     if (!canQuery) {
@@ -253,9 +300,23 @@ export function AuditsPage() {
               </Form.Item>
             ) : null}
 
-            <Form.Item name="action" label="Action">
-              <Input placeholder="例如 object.upload" style={{ width: 190 }} />
-            </Form.Item>
+            {scope === 'platform' ? (
+              <Form.Item name="action" label="Action">
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="全部 Action"
+                  style={{ width: 220 }}
+                  loading={platformFilterOptionsLoading}
+                  options={platformActions.map((value) => ({ label: value, value }))}
+                  notFoundContent="暂无可选 Action，可直接查询全部。"
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item name="action" label="Action">
+                <Input placeholder="例如 object.upload" style={{ width: 190 }} />
+              </Form.Item>
+            )}
 
             <Form.Item name="result" label="Result">
               <Select<AuditResult>
@@ -270,9 +331,23 @@ export function AuditsPage() {
               />
             </Form.Item>
 
-            <Form.Item name="targetType" label="Target Type">
-              <Input placeholder="例如 object / cdn / project" style={{ width: 210 }} />
-            </Form.Item>
+            {scope === 'platform' ? (
+              <Form.Item name="targetType" label="Target Type">
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="全部 Target Type"
+                  style={{ width: 220 }}
+                  loading={platformFilterOptionsLoading}
+                  options={platformTargetTypes.map((value) => ({ label: value, value }))}
+                  notFoundContent="暂无可选 Target Type，可直接查询全部。"
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item name="targetType" label="Target Type">
+                <Input placeholder="例如 object / cdn / project" style={{ width: 210 }} />
+              </Form.Item>
+            )}
 
             <Form.Item name="targetIdentifier" label="Target Identifier">
               <Input placeholder="支持模糊匹配" style={{ width: 240 }} />
@@ -316,6 +391,23 @@ export function AuditsPage() {
               </Button>
             </Form.Item>
           </Form>
+          {scope === 'platform' && !platformFilterOptionsLoading && !platformFilterOptionsError ? (
+            <>
+              {platformActions.length === 0 ? (
+                <Typography.Text type="secondary">
+                  当前暂无 Action 可选值，可直接查询全部日志。
+                </Typography.Text>
+              ) : null}
+              {platformTargetTypes.length === 0 ? (
+                <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+                  当前暂无 Target Type 可选值，可直接查询全部日志。
+                </Typography.Text>
+              ) : null}
+            </>
+          ) : null}
+          {scope === 'platform' && platformFilterOptionsError ? (
+            <Alert type="warning" showIcon style={{ marginTop: 12 }} message={platformFilterOptionsError} />
+          ) : null}
         </Card>
 
         <Card title="Audit Logs">

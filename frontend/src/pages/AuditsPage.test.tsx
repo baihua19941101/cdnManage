@@ -83,4 +83,65 @@ describe('AuditsPage filter query flow', () => {
     expect(await screen.findByText('dist/app.js')).toBeInTheDocument()
     expect(screen.getByText('req-001')).toBeInTheDocument()
   })
+
+  it('loads platform filter options and keeps query available when options are empty', async () => {
+    act(() => {
+      useAuthStore.getState().setSession({
+        token: 'token',
+        user: {
+          id: 1,
+          email: 'admin@example.com',
+          platformRole: 'platform_admin',
+          status: 'active',
+        },
+      })
+    })
+
+    const getMock = vi.spyOn(apiClient, 'get').mockImplementation(async (url, config) => {
+      if (url === '/audits/filter-options') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              actions: [],
+              targetTypes: [],
+            },
+          },
+        } as never
+      }
+      if (url === '/audits') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              logs: [],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${url} ${JSON.stringify(config ?? {})}`)
+    })
+
+    render(<AuditsPage />)
+
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith('/audits/filter-options')
+    })
+
+    expect(screen.getByText('当前暂无 Action 可选值，可直接查询全部日志。')).toBeInTheDocument()
+    expect(screen.getByText('当前暂无 Target Type 可选值，可直接查询全部日志。')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /查询审计日志/ }))
+
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith('/audits', {
+        params: {
+          limit: 20,
+          offset: 0,
+        },
+      })
+    })
+  })
 })
