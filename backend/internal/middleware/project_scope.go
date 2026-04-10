@@ -179,6 +179,10 @@ type keyValueCache interface {
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error
 }
 
+type keyValueDeleteCache interface {
+	Delete(ctx context.Context, key string) error
+}
+
 func NewRedisUserProjectRoleCache(client keyValueCache) *RedisUserProjectRoleCache {
 	return &RedisUserProjectRoleCache{
 		client: client,
@@ -217,4 +221,12 @@ func (c *RedisUserProjectRoleCache) Set(ctx context.Context, userID uint64, role
 
 func (c *RedisUserProjectRoleCache) cacheKey(userID uint64) string {
 	return fmt.Sprintf("%s:%d", c.prefix, userID)
+}
+
+func (c *RedisUserProjectRoleCache) InvalidateUser(ctx context.Context, userID uint64) error {
+	deleter, ok := c.client.(keyValueDeleteCache)
+	if !ok {
+		return nil
+	}
+	return deleter.Delete(ctx, c.cacheKey(userID))
 }

@@ -11,9 +11,14 @@ import (
 )
 
 type Service struct {
-	users    repository.UserRepository
-	projects repository.ProjectRepository
-	tx       repository.TxManager
+	users                repository.UserRepository
+	projects             repository.ProjectRepository
+	tx                   repository.TxManager
+	roleCacheInvalidator RoleCacheInvalidator
+}
+
+type RoleCacheInvalidator interface {
+	InvalidateUser(ctx context.Context, userID uint64) error
 }
 
 type CreateUserInput struct {
@@ -38,11 +43,16 @@ type ProjectBindingInput struct {
 
 const minPasswordLength = 8
 
-func NewService(users repository.UserRepository, projects repository.ProjectRepository, tx repository.TxManager) *Service {
+func NewService(users repository.UserRepository, projects repository.ProjectRepository, tx repository.TxManager, invalidator ...RoleCacheInvalidator) *Service {
+	var cacheInvalidator RoleCacheInvalidator
+	if len(invalidator) > 0 {
+		cacheInvalidator = invalidator[0]
+	}
 	return &Service{
-		users:    users,
-		projects: projects,
-		tx:       tx,
+		users:                users,
+		projects:             projects,
+		tx:                   tx,
+		roleCacheInvalidator: cacheInvalidator,
 	}
 }
 
@@ -108,7 +118,7 @@ func (s *Service) Delete(ctx context.Context, userID uint64) error {
 		return httpresp.NewAppError(404, "user_not_found", "user not found", nil)
 	}
 
-	return s.tx.WithinTransaction(ctx, func(repos repository.Repositories) error {
+	if err := s.tx.WithinTransaction(ctx, func(repos repository.Repositories) error {
 		if err := repos.UserProjectRoles().DeleteByUserID(ctx, userID); err != nil {
 			return fmt.Errorf("delete user project bindings: %w", err)
 		}
@@ -116,7 +126,16 @@ func (s *Service) Delete(ctx context.Context, userID uint64) error {
 			return fmt.Errorf("delete user: %w", err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	if s.roleCacheInvalidator != nil {
+		if err := s.roleCacheInvalidator.InvalidateUser(ctx, userID); err != nil {
+			return fmt.Errorf("invalidate user project role cache: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) ResetPassword(ctx context.Context, userID uint64, newPassword string) error {
@@ -183,6 +202,12 @@ func (s *Service) ReplaceProjectBindings(ctx context.Context, userID uint64, bin
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+
+	if s.roleCacheInvalidator != nil {
+		if err := s.roleCacheInvalidator.InvalidateUser(ctx, userID); err != nil {
+			return nil, fmt.Errorf("invalidate user project role cache: %w", err)
+		}
 	}
 
 	return result, nil
