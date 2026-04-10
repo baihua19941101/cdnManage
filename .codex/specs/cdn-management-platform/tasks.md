@@ -459,7 +459,7 @@
     - 将 Project ID、Action、Target Type 改为可搜索下拉并支持清空
     - Project ID 选项展示 `projectId + projectName`，并在切换项目时联动更新 Action 与 Target Type 选项
     - _Requirements: 19.2, 19.3, 19.5_
-  - [ ] 24.4 统一下拉筛选参数映射与错误提示定位
+  - [x] 24.4 统一下拉筛选参数映射与错误提示定位
     - 在查询请求中仅提交已选下拉项，清空项不传对应参数
     - 对无效筛选上下文、选项加载失败与查询失败提供字段级提示与全局错误提示
     - _Requirements: 19.3, 19.4, 19.5, 8.3, 8.4_

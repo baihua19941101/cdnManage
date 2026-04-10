@@ -121,6 +121,7 @@ describe('AuditsPage filter query flow', () => {
     })
     fireEvent.mouseDown(screen.getAllByRole('combobox')[1])
     expect(await screen.findByRole('option', { name: 'object.upload' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'object.upload' }))
     fireEvent.keyDown(document.body, { key: 'Escape' })
 
     await selectByComboboxIndex(0, '43 - Project-B')
@@ -140,6 +141,13 @@ describe('AuditsPage filter query flow', () => {
           offset: 0,
         },
       })
+    })
+    const projectQueryCall = getMock.mock.calls.find((call) => call[0] === '/projects/43/audits')
+    expect(projectQueryCall?.[1]).toEqual({
+      params: {
+        limit: 20,
+        offset: 0,
+      },
     })
 
     expect(await screen.findByText('https://cdn.example.com/app.js')).toBeInTheDocument()
@@ -207,5 +215,49 @@ describe('AuditsPage filter query flow', () => {
         },
       })
     })
+  })
+
+  it('shows field-level and global errors when options loading or query fails', async () => {
+    act(() => {
+      useAuthStore.getState().setSession({
+        token: 'token',
+        user: {
+          id: 1,
+          email: 'admin@example.com',
+          platformRole: 'platform_admin',
+          status: 'active',
+        },
+      })
+    })
+
+    const getMock = vi.spyOn(apiClient, 'get').mockImplementation(async (url) => {
+      if (url === '/audits/filter-options') {
+        throw new Error('failed')
+      }
+      if (url === '/audits') {
+        throw new Error('failed')
+      }
+      throw new Error(`Unexpected GET url: ${url}`)
+    })
+
+    render(<AuditsPage />)
+
+    expect(await screen.findByText('审计筛选选项加载失败，可直接查询全部日志。')).toBeInTheDocument()
+    expect(screen.getByText('Action 选项加载失败，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByText('Target Type 选项加载失败，请稍后重试。')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /查询审计日志/ }))
+
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith('/audits', {
+        params: {
+          limit: 20,
+          offset: 0,
+        },
+      })
+    })
+
+    expect(await screen.findByText('审计日志查询失败，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByText('查询失败，请检查筛选条件后重试。')).toBeInTheDocument()
   })
 })
