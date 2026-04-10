@@ -81,15 +81,32 @@ type QueryFormValues = {
   offset: number
 }
 
-const buildQueryParams = (values: QueryFormValues, includeActorUserId: boolean) => {
+type BuildQueryParamsOptions = {
+  includeActorUserId: boolean
+  availableActions: string[]
+  availableTargetTypes: string[]
+}
+
+const normalizeSelectValue = (value: string | undefined, availableOptions: string[]) => {
+  const normalized = value?.trim()
+  if (!normalized) {
+    return undefined
+  }
+  if (availableOptions.length > 0 && !availableOptions.includes(normalized)) {
+    return undefined
+  }
+  return normalized
+}
+
+const buildQueryParams = (values: QueryFormValues, options: BuildQueryParamsOptions) => {
   const params: Record<string, string | number> = {
     limit: values.limit,
     offset: values.offset,
   }
 
-  const action = values.action?.trim()
+  const action = normalizeSelectValue(values.action, options.availableActions)
   const result = values.result?.trim()
-  const targetType = values.targetType?.trim()
+  const targetType = normalizeSelectValue(values.targetType, options.availableTargetTypes)
   const targetIdentifier = values.targetIdentifier?.trim()
 
   if (action) {
@@ -105,7 +122,7 @@ const buildQueryParams = (values: QueryFormValues, includeActorUserId: boolean) 
     params.targetIdentifier = targetIdentifier
   }
 
-  if (includeActorUserId) {
+  if (options.includeActorUserId) {
     const actorUserId = values.actorUserId?.trim()
     if (actorUserId) {
       params.actorUserId = actorUserId
@@ -136,6 +153,10 @@ export function AuditsPage() {
   const [projectTargetTypes, setProjectTargetTypes] = useState<string[]>([])
   const [projectFilterOptionsLoading, setProjectFilterOptionsLoading] = useState(false)
   const [projectFilterOptionsError, setProjectFilterOptionsError] = useState<string | null>(null)
+  const [projectFieldHint, setProjectFieldHint] = useState<string | null>(null)
+  const [actionFieldHint, setActionFieldHint] = useState<string | null>(null)
+  const [targetTypeFieldHint, setTargetTypeFieldHint] = useState<string | null>(null)
+  const [scopeFieldHint, setScopeFieldHint] = useState<string | null>(null)
 
   const scope = Form.useWatch('scope', queryForm) ?? 'platform'
   const selectedProjectID = Form.useWatch('projectId', queryForm)
@@ -147,6 +168,7 @@ export function AuditsPage() {
 
   const loadProjectList = async () => {
     setProjectFilterOptionsError(null)
+    setProjectFieldHint(null)
     try {
       const response = await apiClient.get<ApiResponse<ProjectSummary[]>>('/projects')
       const items = Array.isArray(response.data.data) ? response.data.data : []
@@ -175,6 +197,7 @@ export function AuditsPage() {
       setProjectOptions([])
       setProjectActions([])
       setProjectTargetTypes([])
+      setProjectFieldHint('Project ID 选项加载失败，请稍后重试。')
       setProjectFilterOptionsError(resolveAPIErrorMessage(error, '项目级审计筛选项目列表加载失败。'))
     }
   }
@@ -193,6 +216,8 @@ export function AuditsPage() {
 
       setPlatformFilterOptionsLoading(true)
       setPlatformFilterOptionsError(null)
+      setActionFieldHint(null)
+      setTargetTypeFieldHint(null)
       try {
         const response = await apiClient.get<ApiResponse<PlatformAuditFilterOptions>>(
           '/audits/filter-options',
@@ -204,6 +229,8 @@ export function AuditsPage() {
       } catch (error) {
         setPlatformActions([])
         setPlatformTargetTypes([])
+        setActionFieldHint('Action 选项加载失败，请稍后重试。')
+        setTargetTypeFieldHint('Target Type 选项加载失败，请稍后重试。')
         setPlatformFilterOptionsError(
           resolveAPIErrorMessage(error, '审计筛选选项加载失败，可直接查询全部日志。'),
         )
@@ -236,11 +263,15 @@ export function AuditsPage() {
         setProjectActions([])
         setProjectTargetTypes([])
         setProjectFilterOptionsError(null)
+        setActionFieldHint(null)
+        setTargetTypeFieldHint(null)
         return
       }
 
       setProjectFilterOptionsLoading(true)
       setProjectFilterOptionsError(null)
+      setActionFieldHint(null)
+      setTargetTypeFieldHint(null)
       try {
         const response = await apiClient.get<ApiResponse<ProjectAuditFilterOptions>>(
           `/projects/${projectID}/audits/filter-options`,
@@ -259,6 +290,8 @@ export function AuditsPage() {
         }
         setProjectActions(actions)
         setProjectTargetTypes(targetTypes)
+        setActionFieldHint(null)
+        setTargetTypeFieldHint(null)
 
         const currentAction = queryForm.getFieldValue('action')
         if (typeof currentAction === 'string' && currentAction.trim().length > 0 && !actions.includes(currentAction)) {
@@ -275,6 +308,8 @@ export function AuditsPage() {
       } catch (error) {
         setProjectActions([])
         setProjectTargetTypes([])
+        setActionFieldHint('Action 选项加载失败，请稍后重试。')
+        setTargetTypeFieldHint('Target Type 选项加载失败，请稍后重试。')
         setProjectFilterOptionsError(
           resolveAPIErrorMessage(error, '项目级审计筛选选项加载失败，可直接查询全部日志。'),
         )
@@ -291,7 +326,19 @@ export function AuditsPage() {
       return
     }
 
-    const values = await queryForm.validateFields()
+    setScopeFieldHint(null)
+    setProjectFieldHint((current) =>
+      current === '筛选上下文无效，请先选择有效的 Project ID。' || current === '查询失败，请检查 Project ID 后重试。'
+        ? null
+        : current,
+    )
+    const values = await queryForm.validateFields().catch(() => null)
+    if (!values) {
+      setQueryError('筛选条件校验失败，请修正带提示的字段后重试。')
+      messageApi.error('筛选条件校验失败，请检查表单提示。')
+      return
+    }
+
     setLoading(true)
     setQueryError(null)
     setHasSearched(true)
@@ -300,6 +347,8 @@ export function AuditsPage() {
       if (values.scope === 'project') {
         const projectID = Number(values.projectId)
         if (!Number.isFinite(projectID) || projectID <= 0) {
+          setProjectFieldHint('筛选上下文无效，请先选择有效的 Project ID。')
+          setQueryError('筛选上下文无效，请先选择有效的 Project ID。')
           messageApi.error('Project ID 必须是正整数。')
           setLoading(false)
           return
@@ -308,7 +357,11 @@ export function AuditsPage() {
         const response = await apiClient.get<ApiResponse<ListAuditLogsPayload>>(
           `/projects/${projectID}/audits`,
           {
-            params: buildQueryParams(values, false),
+            params: buildQueryParams(values, {
+              includeActorUserId: false,
+              availableActions: projectActions,
+              availableTargetTypes: projectTargetTypes,
+            }),
           },
         )
         setLogs(Array.isArray(response.data.data?.logs) ? response.data.data.logs : [])
@@ -316,6 +369,8 @@ export function AuditsPage() {
       }
 
       if (!canQueryPlatformScope) {
+        setScopeFieldHint('筛选上下文无效，当前账号仅支持项目级审计查询。')
+        setQueryError('筛选上下文无效，当前账号仅支持项目级审计查询。')
         messageApi.error('当前账号仅支持项目级审计查询。')
         setLogs([])
         setLoading(false)
@@ -323,11 +378,20 @@ export function AuditsPage() {
       }
 
       const response = await apiClient.get<ApiResponse<ListAuditLogsPayload>>('/audits', {
-        params: buildQueryParams(values, true),
+        params: buildQueryParams(values, {
+          includeActorUserId: true,
+          availableActions: platformActions,
+          availableTargetTypes: platformTargetTypes,
+        }),
       })
       setLogs(Array.isArray(response.data.data?.logs) ? response.data.data.logs : [])
     } catch (error) {
       setLogs([])
+      if (values.scope === 'project') {
+        setProjectFieldHint('查询失败，请检查 Project ID 后重试。')
+      } else {
+        setScopeFieldHint('查询失败，请检查筛选条件后重试。')
+      }
       setQueryError(resolveAPIErrorMessage(error, '审计日志查询失败，请稍后重试。'))
     } finally {
       setLoading(false)
@@ -401,7 +465,12 @@ export function AuditsPage() {
             }}
             style={{ rowGap: 12 }}
           >
-            <Form.Item name="scope" label="查询范围">
+            <Form.Item
+              name="scope"
+              label="查询范围"
+              validateStatus={scopeFieldHint ? 'error' : undefined}
+              help={scopeFieldHint ?? undefined}
+            >
               <Segmented<QueryScope>
                 options={[
                   { label: '平台级', value: 'platform' },
@@ -416,6 +485,8 @@ export function AuditsPage() {
                 name="projectId"
                 label="Project ID"
                 rules={[{ required: true, message: '请选择 Project ID' }]}
+                validateStatus={projectFieldHint ? 'error' : undefined}
+                help={projectFieldHint ?? undefined}
               >
                 <Select
                   showSearch
@@ -432,6 +503,7 @@ export function AuditsPage() {
                       .includes(input.toLowerCase())
                   }
                   onChange={(value) => {
+                    setProjectFieldHint(null)
                     if (!value) {
                       setProjectActions([])
                       setProjectTargetTypes([])
@@ -451,7 +523,12 @@ export function AuditsPage() {
             ) : null}
 
             {scope === 'platform' ? (
-              <Form.Item name="action" label="Action">
+              <Form.Item
+                name="action"
+                label="Action"
+                validateStatus={actionFieldHint ? 'error' : undefined}
+                help={actionFieldHint ?? undefined}
+              >
                 <Select
                   showSearch
                   allowClear
@@ -460,10 +537,16 @@ export function AuditsPage() {
                   loading={platformFilterOptionsLoading}
                   options={platformActions.map((value) => ({ label: value, value }))}
                   notFoundContent="暂无可选 Action，可直接查询全部。"
+                  onChange={() => setActionFieldHint(null)}
                 />
               </Form.Item>
             ) : (
-              <Form.Item name="action" label="Action">
+              <Form.Item
+                name="action"
+                label="Action"
+                validateStatus={actionFieldHint ? 'error' : undefined}
+                help={actionFieldHint ?? undefined}
+              >
                 <Select
                   showSearch
                   allowClear
@@ -476,6 +559,7 @@ export function AuditsPage() {
                       ? '暂无可选 Action，可直接查询全部。'
                       : '请先选择 Project ID。'
                   }
+                  onChange={() => setActionFieldHint(null)}
                 />
               </Form.Item>
             )}
@@ -494,7 +578,12 @@ export function AuditsPage() {
             </Form.Item>
 
             {scope === 'platform' ? (
-              <Form.Item name="targetType" label="Target Type">
+              <Form.Item
+                name="targetType"
+                label="Target Type"
+                validateStatus={targetTypeFieldHint ? 'error' : undefined}
+                help={targetTypeFieldHint ?? undefined}
+              >
                 <Select
                   showSearch
                   allowClear
@@ -503,10 +592,16 @@ export function AuditsPage() {
                   loading={platformFilterOptionsLoading}
                   options={platformTargetTypes.map((value) => ({ label: value, value }))}
                   notFoundContent="暂无可选 Target Type，可直接查询全部。"
+                  onChange={() => setTargetTypeFieldHint(null)}
                 />
               </Form.Item>
             ) : (
-              <Form.Item name="targetType" label="Target Type">
+              <Form.Item
+                name="targetType"
+                label="Target Type"
+                validateStatus={targetTypeFieldHint ? 'error' : undefined}
+                help={targetTypeFieldHint ?? undefined}
+              >
                 <Select
                   showSearch
                   allowClear
@@ -519,6 +614,7 @@ export function AuditsPage() {
                       ? '暂无可选 Target Type，可直接查询全部。'
                       : '请先选择 Project ID。'
                   }
+                  onChange={() => setTargetTypeFieldHint(null)}
                 />
               </Form.Item>
             )}
