@@ -6,6 +6,11 @@ import { AuditsPage } from './AuditsPage'
 import { apiClient } from '../services/api/client'
 import { useAuthStore } from '../store/auth'
 
+const selectByComboboxIndex = async (index: number, optionText: string) => {
+  fireEvent.mouseDown(screen.getAllByRole('combobox')[index])
+  fireEvent.click(await screen.findByText(optionText))
+}
+
 describe('AuditsPage filter query flow', () => {
   beforeEach(() => {
     act(() => {
@@ -30,59 +35,118 @@ describe('AuditsPage filter query flow', () => {
     })
   })
 
-  it('queries project audits with filter params', async () => {
-    const getMock = vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
-      data: {
-        code: 'success',
-        message: 'ok',
-        data: {
-          logs: [
-            {
-              id: 1,
-              actorUserId: 1001,
-              actorUsername: 'admin',
-              action: 'object.upload',
-              targetType: 'object',
-              targetIdentifier: 'dist/app.js',
-              result: 'success',
-              requestId: 'req-001',
-              createdAt: '2026-04-06T00:00:00Z',
+  it(
+    'loads project-level dropdown options, updates linked options when project changes, and keeps query params compatible',
+    async () => {
+    const getMock = vi.spyOn(apiClient, 'get').mockImplementation(async (url, config) => {
+      if (url === '/projects') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: [
+              { id: 42, name: 'Project-A' },
+              { id: 43, name: 'Project-B' },
+            ],
+          },
+        } as never
+      }
+      if (url === '/projects/42/audits/filter-options') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              projects: [
+                { projectId: 42, projectName: 'Project-A' },
+                { projectId: 43, projectName: 'Project-B' },
+              ],
+              actions: ['object.upload'],
+              targetTypes: ['object'],
             },
-          ],
-        },
-      },
-    } as never)
+          },
+        } as never
+      }
+      if (url === '/projects/43/audits/filter-options') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              projects: [
+                { projectId: 43, projectName: 'Project-B' },
+                { projectId: 42, projectName: 'Project-A' },
+              ],
+              actions: ['cdn.refresh_url'],
+              targetTypes: ['cdn'],
+            },
+          },
+        } as never
+      }
+      if (url === '/projects/43/audits') {
+        return {
+          data: {
+            code: 'success',
+            message: 'ok',
+            data: {
+              logs: [
+                {
+                  id: 1,
+                  actorUserId: 1001,
+                  actorUsername: 'admin',
+                  action: 'cdn.refresh_url',
+                  targetType: 'cdn',
+                  targetIdentifier: 'https://cdn.example.com/app.js',
+                  result: 'success',
+                  requestId: 'req-001',
+                  createdAt: '2026-04-06T00:00:00Z',
+                },
+              ],
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET url: ${String(url)} ${JSON.stringify(config ?? {})}`)
+    })
 
     render(<AuditsPage />)
 
-    fireEvent.change(screen.getByPlaceholderText('例如 42'), { target: { value: '42' } })
-    fireEvent.change(screen.getByPlaceholderText('例如 object.upload'), {
-      target: { value: 'object.upload' },
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith('/projects')
     })
-    fireEvent.change(screen.getByPlaceholderText('例如 object / cdn / project'), {
-      target: { value: 'object' },
+
+    await selectByComboboxIndex(0, '42 - Project-A')
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith('/projects/42/audits/filter-options')
     })
-    fireEvent.change(screen.getByPlaceholderText('支持模糊匹配'), {
-      target: { value: 'dist/' },
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[1])
+    expect(await screen.findByRole('option', { name: 'object.upload' })).toBeInTheDocument()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    await selectByComboboxIndex(0, '43 - Project-B')
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith('/projects/43/audits/filter-options')
     })
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[1])
+    expect(await screen.findByRole('option', { name: 'cdn.refresh_url' })).toBeInTheDocument()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
 
     fireEvent.click(screen.getByRole('button', { name: /查询审计日志/ }))
 
     await waitFor(() => {
-      expect(getMock).toHaveBeenCalledWith('/projects/42/audits', {
+      expect(getMock).toHaveBeenCalledWith('/projects/43/audits', {
         params: {
-          action: 'object.upload',
-          targetType: 'object',
-          targetIdentifier: 'dist/',
           limit: 20,
           offset: 0,
         },
       })
     })
 
-    expect(await screen.findByText('dist/app.js')).toBeInTheDocument()
+    expect(await screen.findByText('https://cdn.example.com/app.js')).toBeInTheDocument()
     expect(screen.getByText('req-001')).toBeInTheDocument()
-  })
+    },
+    15000,
+  )
 
   it('loads platform filter options and keeps query available when options are empty', async () => {
     act(() => {
