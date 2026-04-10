@@ -1,8 +1,10 @@
 package audits
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -20,7 +22,17 @@ type projectScopeMiddleware interface {
 }
 
 type Handler struct {
-	audits repository.AuditLogRepository
+	audits           repository.AuditLogRepository
+	projects         projectRepository
+	userProjectRoles userProjectRoleRepository
+}
+
+type projectRepository interface {
+	List(ctx context.Context, filter repository.ProjectFilter) ([]model.Project, error)
+}
+
+type userProjectRoleRepository interface {
+	ListByUserID(ctx context.Context, userID uint64) ([]model.UserProjectRole, error)
 }
 
 type auditLogResponse struct {
@@ -40,8 +52,28 @@ type listAuditLogsResponse struct {
 	Logs []auditLogResponse `json:"logs"`
 }
 
-func NewHandler(audits repository.AuditLogRepository) *Handler {
-	return &Handler{audits: audits}
+type platformAuditFilterOptionsResponse struct {
+	Actions     []string `json:"actions"`
+	TargetTypes []string `json:"targetTypes"`
+}
+
+type projectFilterOptionProject struct {
+	ProjectID   uint64 `json:"projectId"`
+	ProjectName string `json:"projectName"`
+}
+
+type projectAuditFilterOptionsResponse struct {
+	Projects    []projectFilterOptionProject `json:"projects"`
+	Actions     []string                     `json:"actions"`
+	TargetTypes []string                     `json:"targetTypes"`
+}
+
+func NewHandler(audits repository.AuditLogRepository, projects projectRepository, userProjectRoles userProjectRoleRepository) *Handler {
+	return &Handler{
+		audits:           audits,
+		projects:         projects,
+		userProjectRoles: userProjectRoles,
+	}
 }
 
 func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *serviceauth.Service, projectScope projectScopeMiddleware) {
@@ -49,6 +81,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	platformGroup.Use(middleware.Authentication(authenticator))
 	platformGroup.Use(middleware.RequirePlatformAdmin())
 	platformGroup.GET("", handler.ListPlatformAuditLogs)
+	platformGroup.GET("/filter-options", handler.GetPlatformAuditFilterOptions)
 
 	projectGroup := router.Group("/api/v1/projects/:id/audits")
 	projectGroup.Use(middleware.Authentication(authenticator))
@@ -56,6 +89,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 		projectGroup.Use(projectScope.Middleware())
 	}
 	projectGroup.GET("", middleware.RequireProjectWrite(), handler.ListProjectAuditLogs)
+	projectGroup.GET("/filter-options", middleware.RequireProjectWrite(), handler.GetProjectAuditFilterOptions)
 }
 
 func (h *Handler) ListPlatformAuditLogs(ctx *gin.Context) {
@@ -94,6 +128,123 @@ func (h *Handler) ListProjectAuditLogs(ctx *gin.Context) {
 	}
 
 	httpresp.Success(ctx, listAuditLogsResponse{Logs: toAuditLogResponses(logs)})
+}
+
+func (h *Handler) GetPlatformAuditFilterOptions(ctx *gin.Context) {
+	options, err := h.loadAuditFilterOptions(ctx, nil)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	httpresp.Success(ctx, platformAuditFilterOptionsResponse{
+		Actions:     options.actions,
+		TargetTypes: options.targetTypes,
+	})
+}
+
+func (h *Handler) GetProjectAuditFilterOptions(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	options, err := h.loadAuditFilterOptions(ctx, &projectID)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	projects, err := h.listWritableProjects(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	httpresp.Success(ctx, projectAuditFilterOptionsResponse{
+		Projects:    projects,
+		Actions:     options.actions,
+		TargetTypes: options.targetTypes,
+	})
+}
+
+type auditFilterOptions struct {
+	actions     []string
+	targetTypes []string
+}
+
+func (h *Handler) loadAuditFilterOptions(ctx *gin.Context, projectID *uint64) (auditFilterOptions, error) {
+	actions, err := h.audits.ListDistinctActions(ctx.Request.Context(), projectID)
+	if err != nil {
+		return auditFilterOptions{}, err
+	}
+
+	targetTypes, err := h.audits.ListDistinctTargetTypes(ctx.Request.Context(), projectID)
+	if err != nil {
+		return auditFilterOptions{}, err
+	}
+
+	return auditFilterOptions{
+		actions:     actions,
+		targetTypes: targetTypes,
+	}, nil
+}
+
+func (h *Handler) listWritableProjects(ctx *gin.Context) ([]projectFilterOptionProject, error) {
+	platformRole, ok := middleware.CurrentPlatformRole(ctx)
+	if !ok {
+		return nil, httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authenticated user is required", nil)
+	}
+
+	projects, err := h.projects.List(ctx.Request.Context(), repository.ProjectFilter{})
+	if err != nil {
+		return nil, err
+	}
+
+	if model.IsPlatformAdminRole(platformRole) {
+		return toProjectFilterOptionProjects(projects), nil
+	}
+
+	userID, ok := middleware.CurrentUserID(ctx)
+	if !ok {
+		return nil, httpresp.NewAppError(http.StatusUnauthorized, "authentication_failed", "authenticated user is required", nil)
+	}
+
+	bindings, err := h.userProjectRoles.ListByUserID(ctx.Request.Context(), userID)
+	if err != nil {
+		return nil, err
+	}
+
+	writableProjectIDs := make(map[uint64]struct{}, len(bindings))
+	for _, binding := range bindings {
+		if model.CanWriteProject(platformRole, binding.ProjectRole) {
+			writableProjectIDs[binding.ProjectID] = struct{}{}
+		}
+	}
+
+	filteredProjects := make([]model.Project, 0, len(writableProjectIDs))
+	for _, project := range projects {
+		if _, exists := writableProjectIDs[project.ID]; exists {
+			filteredProjects = append(filteredProjects, project)
+		}
+	}
+
+	return toProjectFilterOptionProjects(filteredProjects), nil
+}
+
+func toProjectFilterOptionProjects(projects []model.Project) []projectFilterOptionProject {
+	response := make([]projectFilterOptionProject, 0, len(projects))
+	for _, project := range projects {
+		response = append(response, projectFilterOptionProject{
+			ProjectID:   project.ID,
+			ProjectName: project.Name,
+		})
+	}
+	sort.Slice(response, func(i, j int) bool {
+		return response[i].ProjectID > response[j].ProjectID
+	})
+	return response
 }
 
 func auditLogFilterFromQuery(ctx *gin.Context, projectID *uint64) (repository.AuditLogFilter, error) {

@@ -51,6 +51,8 @@ type ProjectCDNRepository interface {
 type AuditLogRepository interface {
 	Create(ctx context.Context, log *model.AuditLog) error
 	List(ctx context.Context, filter AuditLogFilter) ([]model.AuditLog, error)
+	ListDistinctActions(ctx context.Context, projectID *uint64) ([]string, error)
+	ListDistinctTargetTypes(ctx context.Context, projectID *uint64) ([]string, error)
 }
 
 type Repositories interface {
