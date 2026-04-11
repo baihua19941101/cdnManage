@@ -66,7 +66,7 @@ const navigationItems: ShellNavigationItem[] = [
     key: '/cdn',
     icon: <CloudServerOutlined />,
     label: 'CDN',
-    allowedRoles: ['super_admin', 'platform_admin'],
+    allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/audits',
