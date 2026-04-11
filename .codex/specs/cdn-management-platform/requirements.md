@@ -283,3 +283,15 @@
 3. WHEN 已授权用户选择某个可见项目，THE CDN 管理平台 SHALL 返回该项目上下文中的存储桶绑定与 CDN 绑定信息。
 4. WHILE 用户在项目内执行存储或 CDN 写操作，THE CDN 管理平台 SHALL 基于平台角色与项目角色联合判定写权限并仅允许具备项目写权限的用户执行。
 5. IF 用户请求不在授权范围内的项目上下文或项目操作，THEN THE CDN 管理平台 SHALL 拒绝请求并返回可追踪的权限错误信息。
+
+### Requirement 21
+
+**User Story:** 作为标准用户中的项目管理员或项目只读用户，我希望在 CDN 页面按项目查询可用目录，这样我可以在授权范围内进行目录选择而不需要手工输入路径。
+
+#### Acceptance Criteria
+
+1. WHEN 已授权用户在 CDN 页面选择项目与存储桶后请求目录查询，THE CDN 管理平台 SHALL 返回该项目与存储桶作用域下的目录列表。
+2. WHILE 用户的项目角色为 `project_read_only`，THE CDN 管理平台 SHALL 允许该用户查询目录并拒绝该用户执行 CDN 刷新或资源同步写操作。
+3. WHILE 用户的项目角色为 `project_admin`，THE CDN 管理平台 SHALL 允许该用户查询目录并执行 CDN 刷新或资源同步写操作。
+4. IF 用户请求目录查询时缺少项目标识或存储桶标识，THEN THE CDN 管理平台 SHALL 拒绝请求并返回可定位字段的参数校验错误。
+5. IF 用户请求目录查询超出项目授权范围，THEN THE CDN 管理平台 SHALL 拒绝请求并返回可追踪的权限错误信息。

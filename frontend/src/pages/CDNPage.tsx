@@ -34,6 +34,10 @@ type CDNTaskResult = {
   metadata?: Record<string, string>
 }
 
+type DirectoryQueryResult = {
+  directories?: string[]
+}
+
 type BaseFormValues = {
   projectId: string
   cdnEndpoint?: string
@@ -187,6 +191,10 @@ export function CDNPage() {
     directory: null,
     sync: null,
   })
+  const [directoryQueryPrefix, setDirectoryQueryPrefix] = useState('')
+  const [directoryQueryLoading, setDirectoryQueryLoading] = useState(false)
+  const [directoryOptions, setDirectoryOptions] = useState<string[]>([])
+  const [selectedDirectory, setSelectedDirectory] = useState<string>()
   const selectedProjectID = Form.useWatch('projectId', baseForm)
 
   const hasCDNBindings = cdnOptions.length > 0
@@ -248,6 +256,8 @@ export function CDNPage() {
       setCurrentProjectRole('')
       setCDNOptions([])
       setBucketOptions([])
+      setDirectoryOptions([])
+      setSelectedDirectory(undefined)
       baseForm.setFieldsValue({
         cdnEndpoint: '',
         bucketName: '',
@@ -284,6 +294,8 @@ export function CDNPage() {
 
       setCDNOptions(cdnList)
       setBucketOptions(bucketList)
+      setDirectoryOptions([])
+      setSelectedDirectory(undefined)
       baseForm.setFieldsValue({
         cdnEndpoint: nextCDN,
         bucketName: nextBucket,
@@ -292,6 +304,8 @@ export function CDNPage() {
       setCurrentProjectRole('')
       setCDNOptions([])
       setBucketOptions([])
+      setDirectoryOptions([])
+      setSelectedDirectory(undefined)
       baseForm.setFieldsValue({
         cdnEndpoint: '',
         bucketName: '',
@@ -363,6 +377,67 @@ export function CDNPage() {
       messageApi.error(resolveAPIErrorMessage(error, activeMeta.errorMessage))
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const queryDirectoryCandidates = async () => {
+    let basePayload: Awaited<ReturnType<typeof getBasePayload>>
+    try {
+      basePayload = await getBasePayload()
+    } catch {
+      return
+    }
+    const bucketName = basePayload.bucketName.trim()
+    if (!bucketName) {
+      messageApi.error('请先选择 Bucket Name 后再查询目录。')
+      return
+    }
+
+    setDirectoryQueryLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<DirectoryQueryResult>>(
+        `/projects/${basePayload.projectID}/cdns/directories`,
+        {
+          params: {
+            bucketName,
+            prefix: directoryQueryPrefix.trim() || undefined,
+          },
+        },
+      )
+      const directories = Array.isArray(response.data.data?.directories)
+        ? response.data.data?.directories?.filter(
+            (item): item is string => typeof item === 'string' && item.trim().length > 0,
+          ) ?? []
+        : []
+      setDirectoryOptions(directories)
+      setSelectedDirectory(undefined)
+      if (directories.length === 0) {
+        messageApi.info('当前条件下未查询到目录。')
+      } else {
+        messageApi.success(`已查询到 ${directories.length} 个目录。`)
+      }
+    } catch (error) {
+      setDirectoryOptions([])
+      setSelectedDirectory(undefined)
+      messageApi.error(resolveAPIErrorMessage(error, '目录查询失败。'))
+    } finally {
+      setDirectoryQueryLoading(false)
+    }
+  }
+
+  const appendSelectedDirectory = () => {
+    const directory = (selectedDirectory ?? '').trim()
+    if (!directory) {
+      return
+    }
+    const current = operationInputs.directory.trim()
+    const nextValue = current ? `${current}\n${directory}` : directory
+    setOperationInputs((prev) => ({
+      ...prev,
+      directory: nextValue,
+    }))
+    if (activeOperation === 'directory') {
+      operationForm.setFieldValue('operationInput', nextValue)
     }
   }
 
@@ -538,6 +613,50 @@ export function CDNPage() {
             </Button>
           }
         >
+          {activeOperation === 'directory' ? (
+            <Card
+              size="small"
+              title="目录查询"
+              style={{ marginBottom: 16 }}
+              extra={
+                <Button loading={directoryQueryLoading} onClick={() => void queryDirectoryCandidates()}>
+                  查询目录
+                </Button>
+              }
+            >
+              <Space wrap>
+                <Input
+                  placeholder="可选前缀，例如 assets/"
+                  style={{ width: 260 }}
+                  value={directoryQueryPrefix}
+                  onChange={(event) => {
+                    setDirectoryQueryPrefix(event.target.value)
+                  }}
+                />
+                <Select
+                  placeholder="选择目录候选"
+                  style={{ width: 320 }}
+                  value={selectedDirectory}
+                  onChange={(value) => {
+                    setSelectedDirectory(value)
+                  }}
+                  options={directoryOptions.map((directory) => ({
+                    value: directory,
+                    label: directory,
+                  }))}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                />
+                <Button onClick={appendSelectedDirectory} disabled={!selectedDirectory}>
+                  添加到目录输入
+                </Button>
+              </Space>
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                当前账号可使用目录查询；仅具备项目写权限的账号可提交刷新/同步操作。
+              </Typography.Paragraph>
+            </Card>
+          ) : null}
           <Tabs
             activeKey={activeOperation}
             onChange={(key) => {

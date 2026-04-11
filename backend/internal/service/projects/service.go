@@ -87,6 +87,12 @@ type ListBucketObjectsInput struct {
 	MaxKeys    int
 }
 
+type ListBucketDirectoriesInput struct {
+	BucketName string
+	Prefix     string
+	MaxKeys    int
+}
+
 type UploadBucketObjectInput struct {
 	BucketName  string
 	Key         string
@@ -405,6 +411,95 @@ func (s *Service) ListBucketObjects(ctx context.Context, projectID uint64, input
 	}
 
 	return objects, nil
+}
+
+func (s *Service) ListBucketDirectories(ctx context.Context, projectID uint64, input ListBucketDirectoriesInput) ([]string, error) {
+	normalizedPrefix := normalizeDirectoryPrefix(input.Prefix)
+	maxKeys := input.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+
+	objects, err := s.ListBucketObjects(ctx, projectID, ListBucketObjectsInput{
+		BucketName: strings.TrimSpace(input.BucketName),
+		Prefix:     normalizedPrefix,
+		MaxKeys:    maxKeys,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	directorySet := make(map[string]struct{})
+	for _, object := range objects {
+		key := strings.TrimSpace(object.Key)
+		if key == "" {
+			continue
+		}
+
+		relative := key
+		if normalizedPrefix != "" && strings.HasPrefix(relative, normalizedPrefix) {
+			relative = strings.TrimPrefix(relative, normalizedPrefix)
+		}
+		relative = strings.TrimPrefix(relative, "/")
+		if relative == "" {
+			continue
+		}
+
+		if object.IsDir {
+			segment := strings.TrimSuffix(relative, "/")
+			if segment == "" {
+				continue
+			}
+			if idx := strings.Index(segment, "/"); idx >= 0 {
+				segment = segment[:idx]
+			}
+			directorySet[composeDirectoryPath(normalizedPrefix, segment)] = struct{}{}
+			continue
+		}
+
+		if idx := strings.Index(relative, "/"); idx > 0 {
+			segment := relative[:idx]
+			directorySet[composeDirectoryPath(normalizedPrefix, segment)] = struct{}{}
+		}
+	}
+
+	directories := make([]string, 0, len(directorySet))
+	for directory := range directorySet {
+		directories = append(directories, directory)
+	}
+	sort.Strings(directories)
+
+	return directories, nil
+}
+
+func normalizeDirectoryPrefix(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasSuffix(trimmed, "/") {
+		trimmed += "/"
+	}
+	return trimmed
+}
+
+func composeDirectoryPath(prefix, segment string) string {
+	normalizedSegment := strings.Trim(strings.TrimSpace(segment), "/")
+	if normalizedSegment == "" {
+		if prefix == "" {
+			return ""
+		}
+		return prefix
+	}
+	if prefix == "" {
+		return normalizedSegment + "/"
+	}
+	return prefix + normalizedSegment + "/"
 }
 
 func (s *Service) UploadBucketObject(ctx context.Context, projectID uint64, input UploadBucketObjectInput) error {

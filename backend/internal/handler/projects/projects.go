@@ -135,6 +135,10 @@ type syncResourcesRequest struct {
 	Paths       []string `json:"paths" binding:"required"`
 }
 
+type listCDNDirectoriesResponse struct {
+	Directories []string `json:"directories"`
+}
+
 type cdnTaskResultResponse struct {
 	ProviderRequestID string            `json:"providerRequestId,omitempty"`
 	TaskID            string            `json:"taskId,omitempty"`
@@ -181,6 +185,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 		projectGroup.Use(projectScope.Middleware())
 	}
 	projectGroup.GET("/cdns", middleware.RequireProjectRead(), handler.GetCDNs)
+	projectGroup.GET("/cdns/directories", middleware.RequireProjectRead(), handler.ListCDNDirectories)
 	projectGroup.GET("/context", middleware.RequireProjectRead(), handler.GetContext)
 	projectGroup.PUT("/cdns", middleware.RequireProjectWrite(), handler.UpdateCDNs)
 	projectGroup.POST("/cdns/refresh-url", middleware.RequireProjectWrite(), handler.RefreshURLs)
@@ -388,6 +393,37 @@ func (h *Handler) GetCDNs(ctx *gin.Context) {
 	}
 
 	httpresp.Success(ctx, gin.H{"cdns": response})
+}
+
+func (h *Handler) ListCDNDirectories(ctx *gin.Context) {
+	projectID, err := projectIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	bucketName := strings.TrimSpace(ctx.Query("bucketName"))
+	if bucketName == "" {
+		ctx.Error(httpresp.NewAppError(http.StatusBadRequest, "validation_error", "bucketName is required", gin.H{
+			"field":  "bucketName",
+			"source": "query",
+		}))
+		return
+	}
+
+	directories, err := h.service.ListBucketDirectories(ctx.Request.Context(), projectID, serviceprojects.ListBucketDirectoriesInput{
+		BucketName: bucketName,
+		Prefix:     ctx.Query("prefix"),
+		MaxKeys:    1000,
+	})
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	httpresp.Success(ctx, listCDNDirectoriesResponse{
+		Directories: directories,
+	})
 }
 
 func (h *Handler) GetContext(ctx *gin.Context) {
