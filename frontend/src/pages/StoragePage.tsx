@@ -30,6 +30,7 @@ import type { TableRowSelection } from 'antd/es/table/interface'
 import type { UploadFile } from 'antd/es/upload/interface'
 import axios from 'axios'
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -714,6 +715,7 @@ const fetchUploadPolicyLimitBytes = async (): Promise<number> => {
 }
 
 export function StoragePage() {
+  const [searchParams] = useSearchParams()
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
   const [renameForm] = Form.useForm<RenameFormValues>()
@@ -767,6 +769,7 @@ export function StoragePage() {
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [bucketOptions, setBucketOptions] = useState<string[]>([])
   const [bucketOptionsLoading, setBucketOptionsLoading] = useState(false)
+  const queryProjectInitializedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -891,9 +894,11 @@ export function StoragePage() {
       const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects/accessible')
       const items = Array.isArray(response.data.data) ? response.data.data : []
       setProjectOptions(items)
+      return items
     } catch (error) {
       messageApi.error(resolveAPIErrorMessage(error, '项目列表加载失败。'))
       setProjectOptions([])
+      return [] as ProjectOption[]
     } finally {
       setProjectOptionsLoading(false)
     }
@@ -937,6 +942,41 @@ export function StoragePage() {
       setBucketOptionsLoading(false)
     }
   }
+
+  useEffect(() => {
+    const bootstrapProjectFromQuery = async () => {
+      if (queryProjectInitializedRef.current) {
+        return
+      }
+      queryProjectInitializedRef.current = true
+
+      const projectIDFromQuery = Number(searchParams.get('projectId'))
+      if (!Number.isFinite(projectIDFromQuery) || projectIDFromQuery <= 0) {
+        return
+      }
+
+      const items = await loadProjectOptions()
+      if (!items.some((project) => project.id === projectIDFromQuery)) {
+        return
+      }
+
+      queryForm.setFieldValue('projectId', String(projectIDFromQuery))
+      await loadBucketsByProject(projectIDFromQuery)
+      await loadUploadSessionSummaries(projectIDFromQuery)
+      queryForm.setFieldValue('prefix', '')
+      setCurrentPrefix('')
+      setObjects([])
+      setSelectedObjectKeys([])
+      setActiveSession(null)
+      setSessionDetailLogs([])
+      setUploadStageBSessionID('')
+      setUploadStageBSummary(null)
+      setUploadStageBFailureSummary('')
+      setUploadStageBActive(false)
+    }
+
+    void bootstrapProjectFromQuery()
+  }, [queryForm, searchParams])
 
   const enterDirectory = async (directoryKey: string) => {
     const nextPrefix = normalizeDirectoryPrefix(directoryKey)
