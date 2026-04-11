@@ -1,4 +1,5 @@
 import { ReloadOutlined } from '@ant-design/icons'
+import { useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -81,6 +82,19 @@ type QueryFormValues = {
   offset: number
 }
 
+type QuerySearchParams = {
+  scope?: QueryScope
+  projectId?: string
+  action?: string
+  result?: AuditResult
+  targetType?: string
+  targetIdentifier?: string
+  actorUserId?: string
+  limit?: number
+  offset?: number
+  autoQuery: boolean
+}
+
 type BuildQueryParamsOptions = {
   includeActorUserId: boolean
   availableActions: string[]
@@ -132,9 +146,77 @@ const buildQueryParams = (values: QueryFormValues, options: BuildQueryParamsOpti
   return params
 }
 
+const normalizePositiveInteger = (value: string | null) => {
+  if (!value) {
+    return undefined
+  }
+  const normalized = value.trim()
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    return undefined
+  }
+  return normalized
+}
+
+const normalizeNonNegativeInteger = (value: string | null) => {
+  if (!value) {
+    return undefined
+  }
+  const normalized = value.trim()
+  if (!/^\d+$/.test(normalized)) {
+    return undefined
+  }
+  return normalized
+}
+
+const normalizeAuditResult = (value: string | null): AuditResult | undefined => {
+  if (value === 'success' || value === 'failure' || value === 'denied') {
+    return value
+  }
+  return undefined
+}
+
+const parseSearchParams = (
+  searchParams: URLSearchParams,
+  canQueryPlatformScope: boolean,
+): QuerySearchParams => {
+  const scopeParam = searchParams.get('scope')
+  const parsedScope: QueryScope | undefined =
+    scopeParam === 'platform' || scopeParam === 'project'
+      ? scopeParam
+      : undefined
+
+  const requestedScope: QueryScope = parsedScope ?? (canQueryPlatformScope ? 'platform' : 'project')
+  const scope: QueryScope = !canQueryPlatformScope && requestedScope === 'platform'
+    ? 'project'
+    : requestedScope
+
+  const projectId = normalizePositiveInteger(searchParams.get('projectId'))
+  const action = searchParams.get('action')?.trim() || undefined
+  const result = normalizeAuditResult(searchParams.get('result'))
+  const targetType = searchParams.get('targetType')?.trim() || undefined
+  const targetIdentifier = searchParams.get('targetIdentifier')?.trim() || undefined
+  const actorUserId = normalizePositiveInteger(searchParams.get('actorUserId'))
+  const limit = Number(normalizePositiveInteger(searchParams.get('limit')) ?? '20')
+  const offset = Number(normalizeNonNegativeInteger(searchParams.get('offset')) ?? '0')
+
+  return {
+    scope,
+    projectId,
+    action,
+    result,
+    targetType,
+    targetIdentifier,
+    actorUserId,
+    limit,
+    offset,
+    autoQuery: searchParams.get('autoQuery') === '1',
+  }
+}
+
 export function AuditsPage() {
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
+  const [searchParams] = useSearchParams()
   const userID = useAuthStore((state) => state.user?.id)
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const canQuery = Boolean(userID)
@@ -157,6 +239,7 @@ export function AuditsPage() {
   const [actionFieldHint, setActionFieldHint] = useState<string | null>(null)
   const [targetTypeFieldHint, setTargetTypeFieldHint] = useState<string | null>(null)
   const [scopeFieldHint, setScopeFieldHint] = useState<string | null>(null)
+  const [pendingAutoQuery, setPendingAutoQuery] = useState(false)
 
   const scope = Form.useWatch('scope', queryForm) ?? 'platform'
   const selectedProjectID = Form.useWatch('projectId', queryForm)
@@ -207,6 +290,35 @@ export function AuditsPage() {
       queryForm.setFieldValue('scope', 'project')
     }
   }, [canQueryPlatformScope, queryForm])
+
+  useEffect(() => {
+    const parsed = parseSearchParams(searchParams, canQueryPlatformScope)
+    const shouldApply =
+      parsed.autoQuery ||
+      Boolean(parsed.projectId || parsed.action || parsed.result || parsed.targetType || parsed.targetIdentifier || parsed.actorUserId)
+    if (!shouldApply) {
+      return
+    }
+
+    queryForm.setFieldsValue({
+      scope: parsed.scope,
+      projectId: parsed.projectId ?? '',
+      action: parsed.action,
+      result: parsed.result,
+      targetType: parsed.targetType,
+      targetIdentifier: parsed.targetIdentifier,
+      actorUserId: parsed.actorUserId ?? '',
+      limit: parsed.limit ?? 20,
+      offset: parsed.offset ?? 0,
+    })
+
+    if (parsed.autoQuery) {
+      const projectScopeMissingProjectID = parsed.scope === 'project' && !parsed.projectId
+      if (!projectScopeMissingProjectID) {
+        setPendingAutoQuery(true)
+      }
+    }
+  }, [canQueryPlatformScope, queryForm, searchParams])
 
   useEffect(() => {
     const loadPlatformFilterOptions = async () => {
@@ -397,6 +509,14 @@ export function AuditsPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!pendingAutoQuery || loading) {
+      return
+    }
+    setPendingAutoQuery(false)
+    void submitQuery()
+  }, [loading, pendingAutoQuery])
 
   const columns: ColumnsType<AuditLog> = [
     { title: 'createdAt', dataIndex: 'createdAt', width: 220 },

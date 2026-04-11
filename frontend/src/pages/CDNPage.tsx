@@ -13,6 +13,7 @@ import {
   message,
 } from 'antd'
 import { type ReactNode, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -166,6 +167,7 @@ function TaskResultCard({ result }: { result: CDNTaskResult | null }) {
 }
 
 export function CDNPage() {
+  const [searchParams] = useSearchParams()
   const [messageApi, messageContext] = message.useMessage()
   const [baseForm] = Form.useForm<BaseFormValues>()
   const [operationForm] = Form.useForm<{ operationInput: string }>()
@@ -195,6 +197,7 @@ export function CDNPage() {
   const [directoryQueryLoading, setDirectoryQueryLoading] = useState(false)
   const [directoryOptions, setDirectoryOptions] = useState<string[]>([])
   const [selectedDirectory, setSelectedDirectory] = useState<string>()
+  const [queryProjectInitialized, setQueryProjectInitialized] = useState(false)
   const selectedProjectID = Form.useWatch('projectId', baseForm)
 
   const hasCDNBindings = cdnOptions.length > 0
@@ -243,9 +246,11 @@ export function CDNPage() {
       const response = await apiClient.get<ApiResponse<ProjectOption[]>>('/projects/accessible')
       const items = Array.isArray(response.data.data) ? response.data.data : []
       setProjectOptions(items)
+      return items
     } catch (error) {
       setProjectOptions([])
       messageApi.error(resolveAPIErrorMessage(error, '项目列表加载失败。'))
+      return [] as ProjectOption[]
     } finally {
       setProjectOptionsLoading(false)
     }
@@ -319,6 +324,31 @@ export function CDNPage() {
   useEffect(() => {
     void loadProjectOptions()
   }, [])
+
+  useEffect(() => {
+    const bootstrapProjectFromQuery = async () => {
+      if (queryProjectInitialized) {
+        return
+      }
+      setQueryProjectInitialized(true)
+
+      const projectIDFromQuery = Number(searchParams.get('projectId'))
+      if (!Number.isFinite(projectIDFromQuery) || projectIDFromQuery <= 0) {
+        return
+      }
+
+      const hasProjectOption = projectOptions.some((project) => project.id === projectIDFromQuery)
+      const options = hasProjectOption ? projectOptions : await loadProjectOptions()
+      if (!options.some((project) => project.id === projectIDFromQuery)) {
+        return
+      }
+
+      baseForm.setFieldValue('projectId', String(projectIDFromQuery))
+      await loadBindingsByProject(projectIDFromQuery)
+    }
+
+    void bootstrapProjectFromQuery()
+  }, [baseForm, projectOptions, queryProjectInitialized, searchParams])
 
   useEffect(() => {
     operationForm.setFieldValue('operationInput', operationInputs[activeOperation])

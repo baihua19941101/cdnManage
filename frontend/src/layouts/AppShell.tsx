@@ -39,7 +39,7 @@ const roleTagColors: Record<PlatformRole, string> = {
 
 const navigationItems: ShellNavigationItem[] = [
   {
-    key: '/',
+    key: '/overview',
     icon: <DeploymentUnitOutlined />,
     label: 'Overview',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],

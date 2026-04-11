@@ -5,9 +5,9 @@ import { AppProviders } from '../app/AppProviders'
 import { AppShell } from '../layouts/AppShell'
 import { AuditsPage } from '../pages/AuditsPage'
 import { CDNPage } from '../pages/CDNPage'
-import { DashboardPage } from '../pages/DashboardPage'
 import { LoginPage } from '../pages/LoginPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
+import { OverviewPage } from '../pages/OverviewPage'
 import { ProjectsPage } from '../pages/ProjectsPage'
 import { SetupPage } from '../pages/SetupPage'
 import { StoragePage } from '../pages/StoragePage'
@@ -42,7 +42,8 @@ export function AppRouter() {
             path="/"
             element={isLoggedIn ? <AppShell /> : <Navigate to="/login" replace />}
           >
-            <Route index element={<DashboardPage />} />
+            <Route index element={<Navigate to="/overview" replace />} />
+            <Route path="overview" element={<OverviewPage />} />
             <Route
               path="projects"
               element={

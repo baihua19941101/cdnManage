@@ -33,7 +33,7 @@ describe('AppRouter route guards', () => {
     expect(await screen.findByText('Sign in to the control deck')).toBeInTheDocument()
   })
 
-  it('redirects authenticated users from /login to dashboard', async () => {
+  it('redirects authenticated users from /login to overview', async () => {
     act(() => {
       useAuthStore.getState().setSession({
         token: 'test-token',
@@ -49,8 +49,6 @@ describe('AppRouter route guards', () => {
 
     render(<AppRouter />)
 
-    expect(
-      await screen.findByText('Frontend foundation is ready for task-driven expansion.'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('Welcome to CDN Manage workspace')).toBeInTheDocument()
   })
 })

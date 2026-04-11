@@ -397,6 +397,44 @@ CDN 操作台页面交互策略（与存储页对齐）：
 - 越权访问拦截
 - 敏感配置变更
 
+#### 7. Overview Workspace Component
+
+职责：
+
+- 提供业务工作台风格首页，优先呈现日常操作所需信息
+- 汇总上传与 CDN 操作关键指标，支持时间范围切换
+- 展示当前用户可见项目范围的项目工作台列表
+- 展示最近失败上传与失败 CDN 操作的运维风险摘要
+- 展示最近活动时间线并支持按 requestId 追踪
+
+主要接口：
+
+- `GET /api/v1/projects/accessible`
+- `GET /api/v1/projects/:id/context`
+- `GET /api/v1/audits`
+- `GET /api/v1/projects/:id/audits`
+
+页面布局策略：
+
+- 顶部区域：欢迎信息、时间范围切换（默认 `24h`）、手动刷新、快捷操作入口。
+- 中部区域：业务核心卡片（上传会话总数、上传失败数、CDN 操作总数、CDN 失败数、可见项目数）。
+- 主区域：项目工作台列表，按“最近活跃时间”默认排序，行内提供 `Storage` 与 `CDN` 入口。
+- 风险区域：最近失败上传会话与最近失败 CDN 操作，支持带筛选条件跳转。
+- 底部区域：最近活动时间线，展示 `actor`、`project`、`action`、`result`、`time`、`requestId`。
+
+权限与可见性策略：
+
+- 平台管理员看到全平台范围汇总与项目列表。
+- 项目角色用户仅看到可见项目范围汇总与项目列表。
+- `project_read_only` 隐藏写操作快捷入口，保留查询与导航入口。
+- 所有统计与风险数据必须遵循项目作用域与角色可见性约束，不得跨项目泄露。
+
+性能策略：
+
+- 第一阶段复用现有 `accessible/context/audits` 接口在前端聚合展示，降低后端改造风险。
+- 第二阶段按需要新增聚合接口（如 `/api/v1/overview`）减少前端并发请求数与重复计算。
+- 首页自动刷新采用 `30~60` 秒窗口；用户进行手工筛选时暂停自动刷新以避免打断操作。
+
 ### Middleware Pipeline
 
 建议中间件顺序如下：
@@ -687,6 +725,7 @@ erDiagram
 - CDN 目录查询接口必须执行项目作用域校验与项目读权限校验，且在缺少 `projectId` 或 `bucketName` 时返回字段级参数错误。
 - 用户项目绑定快照接口必须限制为平台管理员访问，且在目标用户不存在时返回可追踪的 `user_not_found` 错误。
 - 可见项目列表与项目上下文接口在权限拒绝时必须返回可追踪错误码，并在 `details` 中包含 `projectID` 或权限判定关键信息。
+- Overview 首页的统计与风险摘要在返回数据时必须遵循用户可见项目范围，且在跳转参数中保持筛选条件一致性。
 
 ## Testing Strategy
 
@@ -738,6 +777,7 @@ erDiagram
 - CDN 操作台的项目/CDN/存储桶下拉联动与三类操作共享上下文行为
 - CDN 页面目录查询交互与 `project_read_only`/`project_admin` 的写入口状态分离行为
 - 用户绑定弹框的快照预填、紧凑表格编辑与保存后回填行为
+- Overview 首页的业务核心卡片、项目工作台列表、运维风险摘要与最近活动时间线联动行为
 - 三套主题切换是否正确应用
 - 当前目录被删除后返回上一级目录的导航行为
 
@@ -783,3 +823,4 @@ erDiagram
 - Requirement 20: 由 Project Management Component 的 `accessible/context` 接口、ProjectScope 中间件与前端基于项目角色的写权限判定覆盖
 - Requirement 21: 由 CDN Component 的目录查询接口、项目读写权限分离规则与前端目录查询交互覆盖
 - Requirement 22: 由 User and RBAC Component 的绑定快照接口、绑定替换语义与前端紧凑绑定编辑交互覆盖
+- Requirement 23: 由 Overview Workspace Component 的业务核心卡片、快捷入口、项目工作台列表、风险摘要与只读角色可见性规则覆盖
