@@ -72,6 +72,7 @@ func New() (*Application, error) {
 	authHandler := authhandler.NewHandler(authService)
 	userService := serviceusers.NewService(
 		store.Users(),
+		store.UserProjectRoles(),
 		store.Projects(),
 		txManager,
 		userProjectRoleCache,

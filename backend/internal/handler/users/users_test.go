@@ -39,7 +39,7 @@ func TestResetPasswordWritesSuccessAuditLog(t *testing.T) {
 		},
 	}
 	auditRepo := &memoryAuditLogRepository{}
-	handler := NewHandler(serviceusers.NewService(userRepo, nil, nil), auditRepo)
+	handler := NewHandler(serviceusers.NewService(userRepo, nil, nil, nil), auditRepo)
 
 	router := newUsersTestRouter()
 	router.PUT("/api/v1/users/:id/password", injectCurrentUser(actorUserID), handler.ResetPassword)
@@ -74,7 +74,7 @@ func TestResetPasswordWritesFailureAuditLogWhenUserNotFound(t *testing.T) {
 
 	userRepo := &memoryUserRepository{users: map[uint64]*model.User{}}
 	auditRepo := &memoryAuditLogRepository{}
-	handler := NewHandler(serviceusers.NewService(userRepo, nil, nil), auditRepo)
+	handler := NewHandler(serviceusers.NewService(userRepo, nil, nil, nil), auditRepo)
 
 	router := newUsersTestRouter()
 	router.PUT("/api/v1/users/:id/password", injectCurrentUser(actorUserID), handler.ResetPassword)
@@ -102,6 +102,72 @@ func TestResetPasswordWritesFailureAuditLogWhenUserNotFound(t *testing.T) {
 	var metadata map[string]any
 	require.NoError(t, json.Unmarshal(logs[0].Metadata, &metadata))
 	require.Equal(t, "user not found", metadata["error"])
+}
+
+func TestGetProjectBindingsReturnsBindings(t *testing.T) {
+	userRepo := &memoryUserRepository{
+		users: map[uint64]*model.User{
+			42: {
+				BaseModel:    model.BaseModel{ID: 42},
+				Username:     "bound-user",
+				Email:        "bound-user@example.com",
+				PasswordHash: "hash",
+				Status:       model.UserStatusActive,
+				PlatformRole: model.PlatformRoleStandard,
+			},
+		},
+	}
+	roleRepo := &memoryUserProjectRoleRepository{
+		rolesByUserID: map[uint64][]model.UserProjectRole{
+			42: {
+				{UserID: 42, ProjectID: 101, ProjectRole: model.ProjectRoleAdmin},
+				{UserID: 42, ProjectID: 102, ProjectRole: model.ProjectRoleReadOnly},
+			},
+		},
+	}
+	handler := NewHandler(serviceusers.NewService(userRepo, roleRepo, nil, nil), nil)
+
+	router := newUsersTestRouter()
+	router.GET("/api/v1/users/:id/project-bindings", handler.GetProjectBindings)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/42/project-bindings", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var payload struct {
+		Code string `json:"code"`
+		Data struct {
+			Bindings []projectRoleResponse `json:"bindings"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Equal(t, "success", payload.Code)
+	require.Len(t, payload.Data.Bindings, 2)
+	require.Equal(t, projectRoleResponse{ProjectID: 101, ProjectRole: model.ProjectRoleAdmin}, payload.Data.Bindings[0])
+	require.Equal(t, projectRoleResponse{ProjectID: 102, ProjectRole: model.ProjectRoleReadOnly}, payload.Data.Bindings[1])
+}
+
+func TestGetProjectBindingsReturnsUserNotFound(t *testing.T) {
+	userRepo := &memoryUserRepository{users: map[uint64]*model.User{}}
+	roleRepo := &memoryUserProjectRoleRepository{rolesByUserID: map[uint64][]model.UserProjectRole{}}
+	handler := NewHandler(serviceusers.NewService(userRepo, roleRepo, nil, nil), nil)
+
+	router := newUsersTestRouter()
+	router.GET("/api/v1/users/:id/project-bindings", handler.GetProjectBindings)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/404/project-bindings", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+	var payload struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Equal(t, "user_not_found", payload.Code)
+	require.Equal(t, "user not found", payload.Message)
 }
 
 func newUsersTestRouter() *gin.Engine {
@@ -146,8 +212,64 @@ func (r *memoryAuditLogRepository) List(_ context.Context, filter repository.Aud
 	return result, nil
 }
 
+func (r *memoryAuditLogRepository) ListDistinctActions(_ context.Context, _ *uint64) ([]string, error) {
+	return nil, nil
+}
+
+func (r *memoryAuditLogRepository) ListDistinctTargetTypes(_ context.Context, _ *uint64) ([]string, error) {
+	return nil, nil
+}
+
 type memoryUserRepository struct {
 	users map[uint64]*model.User
+}
+
+type memoryUserProjectRoleRepository struct {
+	rolesByUserID map[uint64][]model.UserProjectRole
+}
+
+func (r *memoryUserProjectRoleRepository) Create(_ context.Context, _ *model.UserProjectRole) error {
+	return nil
+}
+
+func (r *memoryUserProjectRoleRepository) DeleteByUserID(_ context.Context, userID uint64) error {
+	if r.rolesByUserID == nil {
+		return nil
+	}
+	delete(r.rolesByUserID, userID)
+	return nil
+}
+
+func (r *memoryUserProjectRoleRepository) DeleteByProjectID(_ context.Context, projectID uint64) error {
+	for userID, roles := range r.rolesByUserID {
+		filtered := make([]model.UserProjectRole, 0, len(roles))
+		for _, role := range roles {
+			if role.ProjectID != projectID {
+				filtered = append(filtered, role)
+			}
+		}
+		r.rolesByUserID[userID] = filtered
+	}
+	return nil
+}
+
+func (r *memoryUserProjectRoleRepository) ListByUserID(_ context.Context, userID uint64) ([]model.UserProjectRole, error) {
+	roles := r.rolesByUserID[userID]
+	result := make([]model.UserProjectRole, len(roles))
+	copy(result, roles)
+	return result, nil
+}
+
+func (r *memoryUserProjectRoleRepository) ListByProjectID(_ context.Context, projectID uint64) ([]model.UserProjectRole, error) {
+	result := make([]model.UserProjectRole, 0)
+	for _, roles := range r.rolesByUserID {
+		for _, role := range roles {
+			if role.ProjectID == projectID {
+				result = append(result, role)
+			}
+		}
+	}
+	return result, nil
 }
 
 func (r *memoryUserRepository) Create(_ context.Context, user *model.User) error {

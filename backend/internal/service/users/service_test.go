@@ -90,7 +90,7 @@ func uniqueSuffix() string {
 func TestServiceReplaceProjectBindingsRejectsDuplicateProjectIDs(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
-	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+	service := NewService(store.Users(), store.UserProjectRoles(), store.Projects(), repository.NewGormTxManager(db))
 	ctx := context.Background()
 	suffix := uniqueSuffix()
 
@@ -121,10 +121,67 @@ func TestServiceReplaceProjectBindingsRejectsDuplicateProjectIDs(t *testing.T) {
 	require.Equal(t, "duplicate_project_binding", appErr.Code)
 }
 
+func TestServiceListProjectBindingsReturnsBindings(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Users(), store.UserProjectRoles(), store.Projects(), repository.NewGormTxManager(db))
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+
+	user := &model.User{
+		Username:     "bindings-" + suffix,
+		Email:        "bindings-" + suffix + "@example.com",
+		PasswordHash: "hash",
+		Status:       model.UserStatusActive,
+		PlatformRole: model.PlatformRoleStandard,
+	}
+	projectA := &model.Project{Name: "project-a-" + suffix, Description: "project a"}
+	projectB := &model.Project{Name: "project-b-" + suffix, Description: "project b"}
+
+	require.NoError(t, store.Users().Create(ctx, user))
+	require.NoError(t, store.Projects().Create(ctx, projectA))
+	require.NoError(t, store.Projects().Create(ctx, projectB))
+	require.NoError(t, store.UserProjectRoles().Create(ctx, &model.UserProjectRole{
+		UserID:      user.ID,
+		ProjectID:   projectA.ID,
+		ProjectRole: model.ProjectRoleAdmin,
+	}))
+	require.NoError(t, store.UserProjectRoles().Create(ctx, &model.UserProjectRole{
+		UserID:      user.ID,
+		ProjectID:   projectB.ID,
+		ProjectRole: model.ProjectRoleReadOnly,
+	}))
+
+	roles, err := service.ListProjectBindings(ctx, user.ID)
+	require.NoError(t, err)
+	require.Len(t, roles, 2)
+
+	roleByProject := make(map[uint64]string, len(roles))
+	for _, role := range roles {
+		roleByProject[role.ProjectID] = role.ProjectRole
+	}
+	require.Equal(t, model.ProjectRoleAdmin, roleByProject[projectA.ID])
+	require.Equal(t, model.ProjectRoleReadOnly, roleByProject[projectB.ID])
+}
+
+func TestServiceListProjectBindingsReturnsUserNotFound(t *testing.T) {
+	db := newTestDB(t)
+	store := repository.NewGormStore(db)
+	service := NewService(store.Users(), store.UserProjectRoles(), store.Projects(), repository.NewGormTxManager(db))
+
+	_, err := service.ListProjectBindings(context.Background(), 999999)
+	require.Error(t, err)
+
+	appErr := &httpresp.AppError{}
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, 404, appErr.StatusCode)
+	require.Equal(t, "user_not_found", appErr.Code)
+}
+
 func TestServiceResetPasswordSucceeds(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
-	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+	service := NewService(store.Users(), store.UserProjectRoles(), store.Projects(), repository.NewGormTxManager(db))
 	ctx := context.Background()
 	suffix := uniqueSuffix()
 
@@ -151,7 +208,7 @@ func TestServiceResetPasswordSucceeds(t *testing.T) {
 func TestServiceResetPasswordReturnsUserNotFound(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
-	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+	service := NewService(store.Users(), store.UserProjectRoles(), store.Projects(), repository.NewGormTxManager(db))
 
 	err := service.ResetPassword(context.Background(), 999999, "NewPassword123!")
 	require.Error(t, err)
@@ -165,7 +222,7 @@ func TestServiceResetPasswordReturnsUserNotFound(t *testing.T) {
 func TestServiceResetPasswordReturnsPasswordPolicyViolation(t *testing.T) {
 	db := newTestDB(t)
 	store := repository.NewGormStore(db)
-	service := NewService(store.Users(), store.Projects(), repository.NewGormTxManager(db))
+	service := NewService(store.Users(), store.UserProjectRoles(), store.Projects(), repository.NewGormTxManager(db))
 	ctx := context.Background()
 	suffix := uniqueSuffix()
 
