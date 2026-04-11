@@ -79,6 +79,7 @@ func RegisterRoutes(router gin.IRouter, handler *Handler, authenticator *service
 	group.PUT("/:id", handler.Update)
 	group.PUT("/:id/password", handler.ResetPassword)
 	group.DELETE("/:id", handler.Delete)
+	group.GET("/:id/project-bindings", handler.GetProjectBindings)
 	group.PUT("/:id/project-bindings", handler.ReplaceProjectBindings)
 }
 
@@ -207,6 +208,30 @@ func (h *Handler) ReplaceProjectBindings(ctx *gin.Context) {
 	}
 
 	roles, err := h.service.ReplaceProjectBindings(ctx.Request.Context(), userID, inputs)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	response := make([]projectRoleResponse, 0, len(roles))
+	for _, role := range roles {
+		response = append(response, projectRoleResponse{
+			ProjectID:   role.ProjectID,
+			ProjectRole: role.ProjectRole,
+		})
+	}
+
+	httpresp.Success(ctx, gin.H{"bindings": response})
+}
+
+func (h *Handler) GetProjectBindings(ctx *gin.Context) {
+	userID, err := userIDFromParam(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	roles, err := h.service.ListProjectBindings(ctx.Request.Context(), userID)
 	if err != nil {
 		ctx.Error(err)
 		return

@@ -1,4 +1,5 @@
 import {
+  DeleteOutlined,
   EditOutlined,
   KeyOutlined,
   PlusOutlined,
@@ -17,13 +18,14 @@ import {
   Popconfirm,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import axios from 'axios'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { apiClient } from '../services/api/client'
 import { hasDuplicateProjectBindings } from './managementValidation'
@@ -39,6 +41,10 @@ type User = {
   email: string
   status: UserStatus
   platformRole: PlatformRole
+  projectRoles?: Array<{
+    projectId: number
+    projectRole: ProjectRole
+  }>
 }
 
 type Project = {
@@ -73,6 +79,8 @@ type BindingFormValues = {
     projectRole: ProjectRole
   }>
 }
+
+type ProjectBinding = BindingFormValues['bindings'][number]
 
 type ResetPasswordFormValues = {
   newPassword: string
@@ -118,6 +126,33 @@ const resolveErrorMessage = (error: unknown, fallback: string) => {
   return fallback
 }
 
+const isProjectRole = (value: unknown): value is ProjectRole =>
+  value === 'project_admin' || value === 'project_read_only'
+
+const normalizeBindings = (bindings: unknown): ProjectBinding[] => {
+  if (!Array.isArray(bindings)) {
+    return []
+  }
+
+  return bindings
+    .map((binding) => {
+      if (!binding || typeof binding !== 'object') {
+        return null
+      }
+
+      const projectIdRaw = 'projectId' in binding ? binding.projectId : undefined
+      const projectRoleRaw = 'projectRole' in binding ? binding.projectRole : undefined
+      const projectId = typeof projectIdRaw === 'number' ? projectIdRaw : Number(projectIdRaw)
+
+      if (!Number.isFinite(projectId) || projectId <= 0 || !isProjectRole(projectRoleRaw)) {
+        return null
+      }
+
+      return { projectId, projectRole: projectRoleRaw }
+    })
+    .filter((item): item is ProjectBinding => item !== null)
+}
+
 export function UsersPage() {
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const canWrite = isPlatformAdminRole(platformRole)
@@ -138,6 +173,8 @@ export function UsersPage() {
   const [bindingVisible, setBindingVisible] = useState(false)
   const [resetPasswordVisible, setResetPasswordVisible] = useState(false)
   const [activeUser, setActiveUser] = useState<User | null>(null)
+  const [bindingSnapshotLoading, setBindingSnapshotLoading] = useState(false)
+  const bindingSnapshotTargetRef = useRef<number | null>(null)
 
   const fetchUsers = async () => {
     setLoading(true)
@@ -243,9 +280,42 @@ export function UsersPage() {
   }
 
   const openBindings = (user: User) => {
+    const cachedBindings = normalizeBindings(user.projectRoles)
     setActiveUser(user)
-    bindingForm.setFieldsValue({ bindings: [] })
+    bindingForm.setFieldsValue({ bindings: cachedBindings })
     setBindingVisible(true)
+    void fetchUserBindingSnapshot(user)
+  }
+
+  const fetchUserBindingSnapshot = async (user: User) => {
+    bindingSnapshotTargetRef.current = user.id
+    setBindingSnapshotLoading(true)
+    try {
+      const response = await apiClient.get<ApiResponse<{ bindings?: ProjectBinding[] }>>(
+        `/users/${user.id}/project-bindings`,
+      )
+      const snapshotBindings = normalizeBindings(response.data.data?.bindings)
+      if (bindingSnapshotTargetRef.current !== user.id) {
+        return snapshotBindings
+      }
+
+      bindingForm.setFieldsValue({ bindings: snapshotBindings })
+      setUsers((currentUsers) =>
+        currentUsers.map((item) =>
+          item.id === user.id ? { ...item, projectRoles: snapshotBindings } : item,
+        ),
+      )
+      return snapshotBindings
+    } catch (e) {
+      if (bindingSnapshotTargetRef.current === user.id) {
+        messageApi.error(resolveErrorMessage(e, '用户项目绑定快照加载失败。'))
+      }
+      return normalizeBindings(user.projectRoles)
+    } finally {
+      if (bindingSnapshotTargetRef.current === user.id) {
+        setBindingSnapshotLoading(false)
+      }
+    }
   }
 
   const openResetPassword = (user: User) => {
@@ -289,7 +359,21 @@ export function UsersPage() {
 
     setSubmitting(true)
     try {
-      await apiClient.put(`/users/${activeUser.id}/project-bindings`, { bindings })
+      const updateResponse = await apiClient.put<ApiResponse<{ bindings?: ProjectBinding[] }>>(
+        `/users/${activeUser.id}/project-bindings`,
+        { bindings },
+      )
+      let latestBindings = normalizeBindings(updateResponse.data.data?.bindings)
+      const refreshedBindings = await fetchUserBindingSnapshot(activeUser)
+      if (refreshedBindings.length > 0 || latestBindings.length === 0) {
+        latestBindings = refreshedBindings
+      }
+      bindingForm.setFieldsValue({ bindings: latestBindings })
+      setUsers((currentUsers) =>
+        currentUsers.map((item) =>
+          item.id === activeUser.id ? { ...item, projectRoles: latestBindings } : item,
+        ),
+      )
       messageApi.success('项目角色绑定已更新。')
       setBindingVisible(false)
     } catch (e) {
@@ -465,37 +549,48 @@ export function UsersPage() {
       <Modal
         title={`项目角色绑定${activeUser ? ` - ${activeUser.username}` : ''}`}
         open={bindingVisible}
-        onCancel={() => setBindingVisible(false)}
+        onCancel={() => {
+          bindingSnapshotTargetRef.current = null
+          setBindingVisible(false)
+        }}
         onOk={() => void submitBindings()}
-        okButtonProps={{ loading: submitting, disabled: !canWrite }}
+        okButtonProps={{ loading: submitting || bindingSnapshotLoading, disabled: !canWrite }}
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
           每次提交会替换该用户当前全部项目绑定关系。
         </Typography.Paragraph>
-        <Form<BindingFormValues> form={bindingForm} layout="vertical">
+        <Spin spinning={bindingSnapshotLoading}>
+          <Form<BindingFormValues> form={bindingForm} layout="vertical">
           <Form.List name="bindings">
             {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                {fields.map((field, index) => (
-                  <Card
+              <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(220px, 1fr) 220px 72px',
+                    gap: 8,
+                    alignItems: 'center',
+                    padding: '0 4px',
+                  }}
+                >
+                  <Typography.Text type="secondary">项目</Typography.Text>
+                  <Typography.Text type="secondary">项目角色</Typography.Text>
+                  <Typography.Text type="secondary">操作</Typography.Text>
+                </div>
+                {fields.map((field) => (
+                  <div
                     key={field.key}
-                    size="small"
-                    title={`绑定 #${index + 1}`}
-                    extra={
-                      <Button
-                        danger
-                        type="link"
-                        onClick={() => remove(field.name)}
-                        disabled={!canWrite}
-                      >
-                        删除
-                      </Button>
-                    }
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(220px, 1fr) 220px 72px',
+                      gap: 8,
+                      alignItems: 'flex-start',
+                    }}
                   >
                     <Form.Item
                       name={[field.name, 'projectId']}
-                      label="项目"
+                      style={{ marginBottom: 0 }}
                       rules={[{ required: true, message: '请选择项目' }]}
                     >
                       <Select
@@ -509,20 +604,32 @@ export function UsersPage() {
                     </Form.Item>
                     <Form.Item
                       name={[field.name, 'projectRole']}
-                      label="项目角色"
+                      style={{ marginBottom: 0 }}
                       rules={[{ required: true, message: '请选择项目角色' }]}
                     >
                       <Select options={projectRoleOptions} />
                     </Form.Item>
-                  </Card>
+                    <Button
+                      danger
+                      type="text"
+                      icon={<DeleteOutlined />}
+                      onClick={() => remove(field.name)}
+                      disabled={!canWrite}
+                    />
+                  </div>
                 ))}
-                <Button type="dashed" onClick={() => add()} disabled={!canWrite}>
+                <Button
+                  type="dashed"
+                  onClick={() => add({ projectRole: 'project_read_only' })}
+                  disabled={!canWrite}
+                >
                   添加项目角色绑定
                 </Button>
               </Space>
             )}
           </Form.List>
-        </Form>
+          </Form>
+        </Spin>
       </Modal>
 
       <Modal

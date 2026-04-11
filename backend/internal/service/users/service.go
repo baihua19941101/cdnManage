@@ -12,6 +12,7 @@ import (
 
 type Service struct {
 	users                repository.UserRepository
+	userProjectRoles     repository.UserProjectRoleRepository
 	projects             repository.ProjectRepository
 	tx                   repository.TxManager
 	roleCacheInvalidator RoleCacheInvalidator
@@ -43,13 +44,14 @@ type ProjectBindingInput struct {
 
 const minPasswordLength = 8
 
-func NewService(users repository.UserRepository, projects repository.ProjectRepository, tx repository.TxManager, invalidator ...RoleCacheInvalidator) *Service {
+func NewService(users repository.UserRepository, userProjectRoles repository.UserProjectRoleRepository, projects repository.ProjectRepository, tx repository.TxManager, invalidator ...RoleCacheInvalidator) *Service {
 	var cacheInvalidator RoleCacheInvalidator
 	if len(invalidator) > 0 {
 		cacheInvalidator = invalidator[0]
 	}
 	return &Service{
 		users:                users,
+		userProjectRoles:     userProjectRoles,
 		projects:             projects,
 		tx:                   tx,
 		roleCacheInvalidator: cacheInvalidator,
@@ -159,6 +161,19 @@ func (s *Service) ResetPassword(ctx context.Context, userID uint64, newPassword 
 	}
 
 	return nil
+}
+
+func (s *Service) ListProjectBindings(ctx context.Context, userID uint64) ([]model.UserProjectRole, error) {
+	if _, err := s.users.GetByID(ctx, userID); err != nil {
+		return nil, httpresp.NewAppError(404, "user_not_found", "user not found", nil)
+	}
+
+	roles, err := s.userProjectRoles.ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user project bindings: %w", err)
+	}
+
+	return roles, nil
 }
 
 func (s *Service) ReplaceProjectBindings(ctx context.Context, userID uint64, bindings []ProjectBindingInput) ([]model.UserProjectRole, error) {
