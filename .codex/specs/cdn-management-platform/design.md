@@ -145,6 +145,7 @@ flowchart LR
 - `PUT /api/v1/users/:id`
 - `DELETE /api/v1/users/:id`
 - `PUT /api/v1/users/:id/password`
+- `GET /api/v1/users/:id/project-bindings`
 - `PUT /api/v1/users/:id/project-bindings`
 
 RBAC 规则：
@@ -152,6 +153,14 @@ RBAC 规则：
 - 平台管理员：全平台资源可管理。
 - 项目管理员：仅可管理已授权项目的资源、CDN、审计查询。
 - 项目只读用户：仅可查看已授权项目的配置、资源与日志。
+
+用户绑定管理交互策略：
+
+- 绑定管理弹框打开时，前端先请求 `GET /api/v1/users/:id/project-bindings` 获取用户项目绑定快照。
+- 前端将快照结果预填到绑定编辑区，避免平台管理员重复录入已存在绑定。
+- 绑定编辑区采用紧凑绑定表格，而非多卡片堆叠，单行包含：项目选择、角色选择、删除操作。
+- 保存操作继续调用 `PUT /api/v1/users/:id/project-bindings`，保持“提交即替换全部绑定”的后端语义不变。
+- 保存成功后前端刷新快照或以返回结果回填，保证二次打开弹框展示最近一次保存状态。
 
 #### 3. Project Management Component
 
@@ -676,6 +685,7 @@ erDiagram
 - 绑定项以 `KEEP` 提交但无可用历史凭据时，响应必须返回可定位绑定项的凭据缺失错误详情。
 - 刷新操作语义由刷新接口类型决定，不依赖绑定配置中的 `purgeScope` 值。
 - CDN 目录查询接口必须执行项目作用域校验与项目读权限校验，且在缺少 `projectId` 或 `bucketName` 时返回字段级参数错误。
+- 用户项目绑定快照接口必须限制为平台管理员访问，且在目标用户不存在时返回可追踪的 `user_not_found` 错误。
 - 可见项目列表与项目上下文接口在权限拒绝时必须返回可追踪错误码，并在 `details` 中包含 `projectID` 或权限判定关键信息。
 
 ## Testing Strategy
@@ -700,6 +710,7 @@ erDiagram
 - 压缩包并发上传的统计一致性与错误聚合逻辑
 - CDN 刷新与资源同步编排逻辑
 - CDN 目录查询接口的项目授权、参数校验与目录聚合逻辑
+- 用户项目绑定快照查询与绑定编辑回填逻辑
 
 测试层次：
 
@@ -726,6 +737,7 @@ erDiagram
 - 单文件 `key` 与多文件 `keyPrefix` 参数提交与提示文案一致性
 - CDN 操作台的项目/CDN/存储桶下拉联动与三类操作共享上下文行为
 - CDN 页面目录查询交互与 `project_read_only`/`project_admin` 的写入口状态分离行为
+- 用户绑定弹框的快照预填、紧凑表格编辑与保存后回填行为
 - 三套主题切换是否正确应用
 - 当前目录被删除后返回上一级目录的导航行为
 
@@ -770,3 +782,4 @@ erDiagram
 - Requirement 19: 由 Audit Component 的筛选下拉选项接口、前端平台级与项目级审计筛选联动覆盖
 - Requirement 20: 由 Project Management Component 的 `accessible/context` 接口、ProjectScope 中间件与前端基于项目角色的写权限判定覆盖
 - Requirement 21: 由 CDN Component 的目录查询接口、项目读写权限分离规则与前端目录查询交互覆盖
+- Requirement 22: 由 User and RBAC Component 的绑定快照接口、绑定替换语义与前端紧凑绑定编辑交互覆盖
