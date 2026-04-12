@@ -1,30 +1,96 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
 :root {
-  font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+  font-family: 'Inter', 'Segoe UI Variable', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #d9ebf2;
-  background: var(--app-background);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --app-background:
-    radial-gradient(circle at top, rgba(44, 94, 117, 0.32), transparent 30%),
-    linear-gradient(180deg, #07131b 0%, #091a24 48%, #0e2028 100%);
+
+  --nt-text-primary: #f1f3fc;
+  --nt-text-secondary: #a8abb3;
+  --nt-accent: #81ecff;
+  --nt-accent-2: #00e3fd;
+  --nt-secondary: #669dff;
+  --nt-shell-border: rgba(68, 72, 79, 0.42);
+  --nt-shell-backdrop: rgba(15, 20, 26, 0.9);
+  --nt-panel-bg: rgba(21, 26, 33, 0.8);
+  --nt-panel-bg-elevated: rgba(27, 32, 40, 0.88);
+  --nt-panel-border: rgba(68, 72, 79, 0.26);
+  --nt-shadow-soft: 0 24px 48px rgba(2, 8, 12, 0.48);
+  --nt-shadow-glow: 0 0 0 1px rgba(129, 236, 255, 0.2), 0 0 22px rgba(129, 236, 255, 0.2);
+  --nt-grid-color: rgba(68, 72, 79, 0.12);
+  --nt-control-bg: #1a2028;
+  --nt-control-bg-hover: #202733;
+  --nt-control-bg-active: #242d3a;
+  --nt-scrollbar-track: rgba(27, 32, 40, 0.52);
+  --nt-scrollbar-thumb: rgba(129, 236, 255, 0.34);
+  --nt-scrollbar-thumb-hover: rgba(129, 236, 255, 0.54);
+  --nt-scrollbar-corner: rgba(17, 23, 30, 0.7);
+  --nt-app-background:
+    radial-gradient(circle at 14% 10%, rgba(27, 62, 82, 0.42), transparent 40%),
+    radial-gradient(circle at 88% 0%, rgba(0, 120, 144, 0.2), transparent 42%),
+    linear-gradient(180deg, #090d13 0%, #0a0e14 52%, #0d121a 100%);
+
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-duration-fast: 140ms;
+  --motion-duration-base: 240ms;
+  --motion-duration-slow: 360ms;
+
+  color: var(--nt-text-primary);
+  background: var(--nt-app-background);
 }
 
 :root[data-theme='light'] {
-  color: #17303b;
-  --app-background:
-    radial-gradient(circle at top, rgba(89, 166, 191, 0.26), transparent 30%),
-    linear-gradient(180deg, #f2f7f8 0%, #e8f0f2 48%, #dce7ea 100%);
+  --nt-text-primary: #2c4553;
+  --nt-text-secondary: #637786;
+  --nt-accent: #0f7f91;
+  --nt-accent-2: #31b2c1;
+  --nt-secondary: #346ca9;
+  --nt-shell-border: rgba(168, 188, 203, 0.58);
+  --nt-shell-backdrop: rgba(238, 245, 251, 0.88);
+  --nt-panel-bg: rgba(248, 252, 255, 0.88);
+  --nt-panel-bg-elevated: rgba(255, 255, 255, 0.96);
+  --nt-panel-border: rgba(185, 206, 220, 0.46);
+  --nt-shadow-soft: 0 20px 42px rgba(42, 77, 99, 0.14);
+  --nt-shadow-glow: 0 0 0 1px rgba(15, 127, 145, 0.18), 0 0 18px rgba(15, 127, 145, 0.14);
+  --nt-grid-color: rgba(120, 146, 162, 0.14);
+  --nt-control-bg: #f2f7fb;
+  --nt-control-bg-hover: #ecf3f9;
+  --nt-control-bg-active: #e6eef6;
+  --nt-scrollbar-track: rgba(214, 226, 236, 0.82);
+  --nt-scrollbar-thumb: rgba(79, 139, 173, 0.46);
+  --nt-scrollbar-thumb-hover: rgba(57, 114, 147, 0.66);
+  --nt-scrollbar-corner: rgba(225, 235, 244, 0.9);
+  --nt-app-background:
+    radial-gradient(circle at 14% 12%, rgba(155, 199, 223, 0.32), transparent 42%),
+    radial-gradient(circle at 92% 0%, rgba(168, 216, 228, 0.24), transparent 44%),
+    linear-gradient(180deg, #edf5fb 0%, #e6f0f8 54%, #dde9f3 100%);
 }
 
-:root[data-theme='auth'] {
-  color: #2d2118;
-  --app-background:
-    radial-gradient(circle at top, rgba(196, 140, 81, 0.22), transparent 28%),
-    linear-gradient(180deg, #f8f0e1 0%, #f0dfc2 50%, #e4cfa9 100%);
+:root[data-theme='dark'] {
+  --nt-text-primary: #f1f3fc;
+  --nt-text-secondary: #a8abb3;
+  --nt-accent: #81ecff;
+  --nt-accent-2: #00e3fd;
+  --nt-secondary: #669dff;
+  --nt-shell-border: rgba(68, 72, 79, 0.42);
+  --nt-shell-backdrop: rgba(15, 20, 26, 0.9);
+  --nt-panel-bg: rgba(21, 26, 33, 0.8);
+  --nt-panel-bg-elevated: rgba(27, 32, 40, 0.88);
+  --nt-panel-border: rgba(68, 72, 79, 0.26);
+  --nt-shadow-soft: 0 24px 48px rgba(2, 8, 12, 0.48);
+  --nt-shadow-glow: 0 0 0 1px rgba(129, 236, 255, 0.2), 0 0 22px rgba(129, 236, 255, 0.2);
+  --nt-grid-color: rgba(68, 72, 79, 0.12);
+  --nt-control-bg: #1a2028;
+  --nt-control-bg-hover: #202733;
+  --nt-control-bg-active: #242d3a;
+  --nt-scrollbar-track: rgba(27, 32, 40, 0.52);
+  --nt-scrollbar-thumb: rgba(129, 236, 255, 0.34);
+  --nt-scrollbar-thumb-hover: rgba(129, 236, 255, 0.54);
+  --nt-scrollbar-corner: rgba(17, 23, 30, 0.7);
 }
 
 * {
@@ -40,10 +106,613 @@ body,
 
 body {
   min-height: 100vh;
-  background: var(--app-background);
-  transition: background 180ms ease, color 180ms ease;
+  background: var(--nt-app-background);
+  color: var(--nt-text-primary);
+  transition: background var(--motion-duration-base) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--nt-grid-color) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--nt-grid-color) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(circle at 52% 28%, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.08) 72%);
+  z-index: 0;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: -20% -10%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 12% 14%, color-mix(in srgb, var(--nt-accent) 24%, transparent), transparent 40%),
+    radial-gradient(circle at 88% 2%, color-mix(in srgb, var(--nt-secondary) 22%, transparent), transparent 42%),
+    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--nt-accent-2) 20%, transparent), transparent 44%);
+  animation: nt-aurora 20s linear infinite;
+  z-index: 0;
+}
+
+/* Global scrollbar skin (Chrome/Edge/Safari + Firefox) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--nt-scrollbar-thumb) var(--nt-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--nt-scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--nt-scrollbar-thumb) 90%, var(--nt-accent)),
+    var(--nt-scrollbar-thumb)
+  );
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--nt-scrollbar-thumb-hover);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--nt-scrollbar-corner);
 }
 
 a {
+  color: var(--nt-accent);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.ant-typography h1,
+.ant-typography h2,
+.ant-typography h3,
+.ant-typography h4,
+.ant-typography h5 {
+  font-family: 'Space Grotesk', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.app-shell-surface {
+  animation: nt-fade-up var(--motion-duration-slow) var(--motion-ease-standard);
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell-sider,
+.app-shell-header {
+  border-color: var(--nt-shell-border) !important;
+}
+
+.app-shell-sider {
+  background: color-mix(in srgb, var(--nt-shell-backdrop) 88%, transparent) !important;
+  backdrop-filter: blur(20px);
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--nt-shell-border) 80%, transparent);
+}
+
+.app-shell-sider::-webkit-scrollbar,
+.ant-layout-content::-webkit-scrollbar,
+.ant-table-content::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+.app-shell-sider::-webkit-scrollbar-thumb,
+.ant-layout-content::-webkit-scrollbar-thumb,
+.ant-table-content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--nt-accent) 48%, var(--nt-scrollbar-thumb));
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.app-shell-sider::-webkit-scrollbar-thumb:hover,
+.ant-layout-content::-webkit-scrollbar-thumb:hover,
+.ant-table-content::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--nt-accent) 62%, var(--nt-scrollbar-thumb-hover));
+}
+
+.app-shell-header {
+  background: color-mix(in srgb, var(--nt-shell-backdrop) 72%, transparent) !important;
+  backdrop-filter: blur(14px);
+}
+
+.app-shell-footer {
+  color: var(--nt-text-secondary);
+}
+
+.app-shell-title,
+.app-shell-brand {
+  color: var(--nt-text-primary) !important;
+}
+
+.app-shell-caption,
+.app-shell-mark {
+  color: var(--nt-text-secondary) !important;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+}
+
+.app-shell-mark {
+  color: var(--nt-accent) !important;
+  font-weight: 700;
+}
+
+.app-shell-sider .ant-menu-item {
+  color: var(--nt-text-secondary) !important;
+  border: 1px solid transparent;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.app-shell-sider .ant-menu-item:hover {
+  color: var(--nt-text-primary) !important;
+  background: color-mix(in srgb, var(--nt-accent) 12%, transparent) !important;
+}
+
+.app-shell-sider .ant-menu-item-selected {
+  color: var(--nt-text-primary) !important;
+  border-left: 4px solid var(--nt-accent);
+  border-radius: 10px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--nt-accent) 14%, transparent), transparent) !important;
+  font-weight: 700;
+}
+
+.app-shell-sider .ant-layout-sider-trigger {
+  height: 52px !important;
+  line-height: 52px !important;
+  background: color-mix(in srgb, var(--nt-panel-bg-elevated) 92%, transparent) !important;
+  border-top: 1px solid color-mix(in srgb, var(--nt-panel-border) 84%, transparent);
+  color: var(--nt-text-secondary) !important;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.app-shell-sider .ant-layout-sider-trigger:hover {
+  background: color-mix(in srgb, var(--nt-accent) 16%, var(--nt-panel-bg-elevated)) !important;
+  color: var(--nt-text-primary) !important;
+}
+
+.nt-role-tag {
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--nt-accent) 34%, transparent) !important;
+  background: color-mix(in srgb, var(--nt-accent) 14%, transparent) !important;
+  color: var(--nt-text-primary) !important;
+}
+
+.auth-scene {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--nt-app-background);
+}
+
+.auth-card {
+  width: min(560px, 100%);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 90%, transparent);
+  box-shadow: var(--nt-shadow-soft);
+  backdrop-filter: blur(20px);
+  animation: nt-fade-up var(--motion-duration-slow) var(--motion-ease-standard);
+}
+
+.auth-card--login {
+  width: min(460px, 100%);
+}
+
+.auth-card .ant-input,
+.auth-card .ant-input-affix-wrapper input,
+.auth-card .ant-input-password input {
+  color: var(--nt-text-primary) !important;
+}
+
+.auth-card .ant-input::placeholder,
+.auth-card .ant-input-affix-wrapper input::placeholder,
+.auth-card .ant-input-password input::placeholder {
+  color: color-mix(in srgb, var(--nt-text-secondary) 92%, transparent) !important;
+  opacity: 1;
+}
+
+.auth-card .ant-form-item-label > label {
+  color: var(--nt-text-secondary) !important;
+  font-weight: 600;
+}
+
+.auth-label {
+  color: var(--nt-accent) !important;
+  letter-spacing: 2px;
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.auth-title {
+  margin: 0 !important;
+  color: var(--nt-text-primary) !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+}
+
+.auth-subtitle,
+.auth-paragraph {
+  color: var(--nt-text-secondary) !important;
+}
+
+.auth-alert {
+  border-radius: 12px;
+}
+
+.auth-card .ant-input,
+.auth-card .ant-input-affix-wrapper {
+  border-radius: 12px;
+}
+
+.auth-card .ant-input-affix-wrapper:focus,
+.auth-card .ant-input-affix-wrapper-focused,
+.auth-card .ant-input:focus,
+.auth-card .ant-input-focused {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--nt-accent) 26%, transparent);
+}
+
+.auth-submit {
+  margin-top: 6px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.nt-hero-card {
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 90%, transparent) !important;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--nt-panel-bg-elevated) 96%, transparent), color-mix(in srgb, var(--nt-panel-bg) 90%, transparent)),
+    radial-gradient(circle at 85% 0%, color-mix(in srgb, var(--nt-accent) 14%, transparent), transparent 44%) !important;
+}
+
+.ant-card,
+.ant-btn,
+.ant-segmented,
+.ant-table-wrapper,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector,
+.ant-input-number {
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-standard),
+    background-color var(--motion-duration-base) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.ant-card {
+  background: var(--nt-panel-bg) !important;
+  border-color: var(--nt-panel-border) !important;
+  box-shadow: var(--nt-shadow-soft);
+  backdrop-filter: none;
+}
+
+.ant-card .ant-card-head {
+  border-bottom-color: color-mix(in srgb, var(--nt-panel-border) 80%, transparent);
+}
+
+.ant-card .ant-card-head-title {
+  color: var(--nt-text-primary);
+  letter-spacing: 0.02em;
+}
+
+.ant-typography {
   color: inherit;
+}
+
+.ant-typography-title,
+.ant-typography h1,
+.ant-typography h2,
+.ant-typography h3,
+.ant-typography h4,
+.ant-typography h5 {
+  color: var(--nt-text-primary) !important;
+  letter-spacing: -0.015em;
+}
+
+:root[data-theme='light'] .ant-typography-title,
+:root[data-theme='light'] .ant-typography h1,
+:root[data-theme='light'] .ant-typography h2,
+:root[data-theme='light'] .ant-typography h3,
+:root[data-theme='light'] .ant-typography h4,
+:root[data-theme='light'] .ant-typography h5,
+:root[data-theme='light'] .app-shell-title,
+:root[data-theme='light'] .app-shell-brand {
+  color: #2f5365 !important;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+:root[data-theme='light'] .app-shell-sider .ant-menu-item,
+:root[data-theme='light'] .app-shell-sider .ant-menu-submenu-title,
+:root[data-theme='light'] .ant-menu-title-content {
+  color: #5f7280 !important;
+}
+
+:root[data-theme='light'] .app-shell-sider .ant-menu-item-selected,
+:root[data-theme='light'] .app-shell-sider .ant-menu-item-selected .ant-menu-title-content {
+  color: #2f5365 !important;
+}
+
+:root[data-theme='light'] .app-shell-sider .ant-layout-sider-trigger {
+  background: #eaf2f8 !important;
+  border-top-color: rgba(174, 196, 211, 0.72) !important;
+  color: #5f7280 !important;
+}
+
+:root[data-theme='light'] .app-shell-sider .ant-layout-sider-trigger:hover {
+  background: #deebf4 !important;
+  color: #2f5365 !important;
+}
+
+.ant-btn-primary {
+  background: linear-gradient(45deg, var(--nt-accent) 0%, var(--nt-accent-2) 100%) !important;
+  border-color: color-mix(in srgb, var(--nt-accent) 60%, #005762) !important;
+  color: #043640 !important;
+}
+
+.ant-btn-primary:hover,
+.ant-btn-primary:focus {
+  box-shadow: var(--nt-shadow-glow);
+}
+
+.ant-btn-default,
+.ant-btn-link {
+  color: var(--nt-text-primary);
+}
+
+.ant-btn-link {
+  color: var(--nt-accent) !important;
+}
+
+.ant-segmented {
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 68%, transparent);
+  background: color-mix(in srgb, var(--nt-panel-bg) 62%, transparent);
+  padding: 2px;
+}
+
+.ant-segmented-item {
+  color: var(--nt-text-secondary);
+}
+
+.ant-segmented-item-selected {
+  color: var(--nt-text-primary) !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--nt-accent) 24%, transparent),
+    0 2px 8px color-mix(in srgb, var(--nt-accent) 16%, transparent) !important;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-picker,
+.ant-select-selector,
+.ant-select-dropdown,
+.ant-picker-dropdown {
+  background: var(--nt-control-bg) !important;
+  border-color: color-mix(in srgb, var(--nt-panel-border) 88%, transparent) !important;
+  color: var(--nt-text-primary) !important;
+  backdrop-filter: none !important;
+}
+
+.ant-input:hover,
+.ant-input-affix-wrapper:hover,
+.ant-input-number:hover,
+.ant-picker:hover,
+.ant-select:not(.ant-select-disabled):hover .ant-select-selector {
+  background: var(--nt-control-bg-hover) !important;
+}
+
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper-focused,
+.ant-input-number-focused,
+.ant-picker-focused,
+.ant-select-focused .ant-select-selector {
+  background: var(--nt-control-bg-active) !important;
+}
+
+.ant-input::placeholder,
+.ant-input-number input::placeholder {
+  color: color-mix(in srgb, var(--nt-text-secondary) 90%, transparent) !important;
+}
+
+.ant-input-affix-wrapper > input.ant-input,
+.ant-input-number-input,
+.ant-picker-input > input {
+  background: transparent !important;
+}
+
+.ant-select-selection-placeholder {
+  color: color-mix(in srgb, var(--nt-text-secondary) 90%, transparent) !important;
+}
+
+.ant-table-wrapper .ant-table {
+  background: transparent !important;
+}
+
+.ant-table-wrapper .ant-table-thead > tr > th {
+  border-bottom-color: color-mix(in srgb, var(--nt-panel-border) 82%, transparent) !important;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--nt-text-secondary) 95%, transparent) !important;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr > td {
+  border-bottom-color: color-mix(in srgb, var(--nt-panel-border) 58%, transparent) !important;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr:hover > td {
+  background: color-mix(in srgb, var(--nt-panel-bg-elevated) 86%, transparent) !important;
+}
+
+.ant-tag {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 90%, transparent);
+  background: color-mix(in srgb, var(--nt-panel-bg-elevated) 95%, transparent);
+  color: var(--nt-text-secondary);
+}
+
+.ant-tag-green,
+.ant-tag-success {
+  color: #8ff1ce !important;
+  border-color: rgba(61, 223, 177, 0.34) !important;
+  background: rgba(61, 223, 177, 0.12) !important;
+}
+
+.ant-tag-red,
+.ant-tag-error {
+  color: #ffb7b4 !important;
+  border-color: rgba(255, 113, 108, 0.34) !important;
+  background: rgba(255, 113, 108, 0.12) !important;
+}
+
+.ant-tag-orange,
+.ant-tag-warning {
+  color: #f3cf93 !important;
+  border-color: rgba(242, 191, 92, 0.34) !important;
+  background: rgba(242, 191, 92, 0.12) !important;
+}
+
+.ant-tag-geekblue,
+.ant-tag-blue,
+.ant-tag-cyan,
+.ant-tag-magenta,
+.ant-tag-gold,
+.ant-tag-purple {
+  color: #b3f4ff !important;
+  border-color: rgba(129, 236, 255, 0.34) !important;
+  background: rgba(129, 236, 255, 0.12) !important;
+}
+
+:root[data-theme='light'] .ant-tag {
+  color: #2c4350;
+  border-color: rgba(95, 129, 148, 0.38);
+  background: rgba(221, 234, 244, 0.72);
+  font-weight: 600;
+}
+
+:root[data-theme='light'] .ant-tag-green,
+:root[data-theme='light'] .ant-tag-success {
+  color: #0e5b40 !important;
+  border-color: rgba(29, 138, 100, 0.44) !important;
+  background: rgba(198, 238, 224, 0.88) !important;
+}
+
+:root[data-theme='light'] .ant-tag-red,
+:root[data-theme='light'] .ant-tag-error {
+  color: #7d2230 !important;
+  border-color: rgba(190, 68, 88, 0.44) !important;
+  background: rgba(249, 215, 222, 0.9) !important;
+}
+
+:root[data-theme='light'] .ant-tag-orange,
+:root[data-theme='light'] .ant-tag-warning {
+  color: #7f4d10 !important;
+  border-color: rgba(195, 132, 41, 0.44) !important;
+  background: rgba(248, 229, 196, 0.92) !important;
+}
+
+:root[data-theme='light'] .ant-tag-geekblue,
+:root[data-theme='light'] .ant-tag-blue,
+:root[data-theme='light'] .ant-tag-cyan,
+:root[data-theme='light'] .ant-tag-magenta,
+:root[data-theme='light'] .ant-tag-gold,
+:root[data-theme='light'] .ant-tag-purple {
+  color: #114f68 !important;
+  border-color: rgba(42, 128, 162, 0.44) !important;
+  background: rgba(204, 232, 245, 0.9) !important;
+}
+
+.ant-card:hover,
+.ant-btn:hover,
+.ant-table-wrapper:hover {
+  transform: translateY(-1px);
+}
+
+@keyframes nt-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nt-aurora {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, 1.5%, 0) scale(1.03);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@media (max-width: 960px) {
+  .app-shell-surface {
+    animation-duration: var(--motion-duration-base);
+  }
+
+  .auth-scene {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce), (update: slow) {
+  :root {
+    --motion-duration-fast: 1ms;
+    --motion-duration-base: 1ms;
+    --motion-duration-slow: 1ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .ant-card:hover,
+  .ant-btn:hover,
+  .ant-table-wrapper:hover {
+    transform: none;
+  }
+
+  body::after {
+    animation: none !important;
+  }
 }

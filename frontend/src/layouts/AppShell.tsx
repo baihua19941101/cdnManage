@@ -4,7 +4,6 @@ import {
   DeploymentUnitOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
-  HighlightOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { Button, Layout, Menu, Segmented, Space, Tag, Typography } from 'antd'
@@ -16,7 +15,7 @@ import { themePresets, type ThemeMode } from '../app/themes'
 import { useShellStore } from '../store/shell'
 import { useAuthStore, type PlatformRole } from '../store/auth'
 
-const { Content, Footer, Header, Sider } = Layout
+const { Content, Header, Sider } = Layout
 
 type ShellNavigationItem = {
   key: string
@@ -26,52 +25,46 @@ type ShellNavigationItem = {
 }
 
 const roleLabels: Record<PlatformRole, string> = {
-  super_admin: 'Super Admin',
-  platform_admin: 'Platform Admin',
-  standard_user: 'Standard User',
-}
-
-const roleTagColors: Record<PlatformRole, string> = {
-  super_admin: 'magenta',
-  platform_admin: 'geekblue',
-  standard_user: 'cyan',
+  super_admin: '超级管理员',
+  platform_admin: '平台管理员',
+  standard_user: '标准用户',
 }
 
 const navigationItems: ShellNavigationItem[] = [
   {
     key: '/overview',
     icon: <DeploymentUnitOutlined />,
-    label: 'Overview',
+    label: '总览',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/projects',
     icon: <FolderOpenOutlined />,
-    label: 'Projects',
+    label: '项目管理',
     allowedRoles: ['super_admin', 'platform_admin'],
   },
   {
     key: '/users',
     icon: <TeamOutlined />,
-    label: 'Users',
+    label: '用户管理',
     allowedRoles: ['super_admin', 'platform_admin'],
   },
   {
     key: '/storage',
     icon: <DatabaseOutlined />,
-    label: 'Storage',
+    label: '存储管理',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/cdn',
     icon: <CloudServerOutlined />,
-    label: 'CDN',
+    label: 'CDN管理',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/audits',
     icon: <FileSearchOutlined />,
-    label: 'Audits',
+    label: '审计管理',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
 ]
@@ -103,7 +96,9 @@ export function AppShell() {
     [accessibleNavigationItems],
   )
   const selectedMenuKey =
-    location.pathname === '/' ? '/' : `/${location.pathname.split('/')[1]}`
+    location.pathname === '/' ? '/overview' : `/${location.pathname.split('/')[1]}`
+  const currentSectionLabel =
+    accessibleNavigationItems.find((item) => item.key === selectedMenuKey)?.label ?? '控制台'
   const fallbackPath = accessibleNavigationItems[0]?.key
   const hasAccessToCurrentPath = accessibleNavigationItems.some(
     (item) => item.key === selectedMenuKey,
@@ -123,43 +118,45 @@ export function AppShell() {
     navigate('/login', { replace: true })
   }
 
-  const shellBackdrop =
-    themeMode === 'light'
-      ? 'rgba(236, 245, 247, 0.9)'
-      : themeMode === 'auth'
-        ? 'rgba(244, 235, 220, 0.88)'
-        : 'rgba(5, 17, 24, 0.88)'
-
   return (
-    <Layout style={{ minHeight: '100vh', background: 'transparent' }}>
+    <Layout
+      style={{
+        minHeight: '100vh',
+        height: '100vh',
+        overflow: 'hidden',
+        background: 'transparent',
+      }}
+      className="app-shell-surface"
+    >
       <Sider
         breakpoint="lg"
         collapsible
         collapsed={collapsed}
         onCollapse={setCollapsed}
         width={256}
+        className="app-shell-sider"
         style={{
-          background: shellBackdrop,
-          backdropFilter: 'blur(12px)',
-          borderRight: '1px solid rgba(125, 176, 196, 0.16)',
+          borderRight: '1px solid var(--nt-shell-border)',
+          position: 'sticky',
+          top: 0,
+          left: 0,
+          height: '100vh',
+          overflow: 'auto',
         }}
       >
         <div style={{ padding: 20 }}>
-          <Typography.Text
-            style={{ display: 'block', fontSize: 12, letterSpacing: 2, color: '#6fc9be' }}
-          >
-            CDN MANAGE
+          <Typography.Text className="app-shell-mark" style={{ display: 'block', fontSize: 12 }}>
+            COMMAND CENTER
           </Typography.Text>
           {!collapsed ? (
             <Typography.Title
               level={4}
+              className="app-shell-brand"
               style={{
                 margin: '8px 0 0',
-                color: '#f4fbfd',
-                fontFamily: '"Iowan Old Style", "Palatino Linotype", serif',
               }}
             >
-              Control Deck
+              CDN管理平台
             </Typography.Title>
           ) : null}
         </div>
@@ -172,63 +169,60 @@ export function AppShell() {
         />
       </Sider>
 
-      <Layout style={{ background: 'transparent' }}>
+      <Layout style={{ background: 'transparent', minWidth: 0, height: '100vh' }}>
         <Header
+          className="app-shell-header"
           style={{
             background: 'transparent',
-            borderBottom: '1px solid rgba(125, 176, 196, 0.16)',
+            borderBottom: '1px solid var(--nt-shell-border)',
             padding: '0 24px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flex: '0 0 auto',
           }}
         >
-          <Space direction="vertical" size={0}>
-            <Typography.Text style={{ color: '#7db0c4', letterSpacing: 1.5, fontSize: 12 }}>
-              DESKTOP CONTROL SURFACE
-            </Typography.Text>
-            <Typography.Title
-              level={3}
-              style={{
-                margin: 0,
-                color: '#f4fbfd',
-                fontFamily: '"Iowan Old Style", "Palatino Linotype", serif',
-              }}
-            >
-              Frontend Bootstrap
-            </Typography.Title>
-          </Space>
+          <Typography.Title
+            level={3}
+            className="app-shell-title"
+            style={{
+              margin: 0,
+            }}
+          >
+            {currentSectionLabel}
+          </Typography.Title>
           <Space size="middle">
+            <Segmented<ThemeMode>
+              size="middle"
+              value={themeMode}
+              options={
+                (Object.entries(themePresets) as [ThemeMode, (typeof themePresets)[ThemeMode]][]).map(
+                  ([value, preset]) => ({
+                    label: preset.label,
+                    value,
+                  }),
+                )
+              }
+              onChange={(value) => setThemeMode(value)}
+            />
             <Space size="small">
-              <HighlightOutlined style={{ color: '#7db0c4' }} />
-              <Segmented<ThemeMode>
-                size="middle"
-                value={themeMode}
-                options={(Object.entries(themePresets) as [ThemeMode, (typeof themePresets)[ThemeMode]][]).map(([value, preset]) => ({
-                  label: preset.label,
-                  value,
-                }))}
-                onChange={(value) => setThemeMode(value)}
-              />
+              <Typography.Text style={{ color: 'var(--nt-text-primary)' }}>{userEmail}</Typography.Text>
+              <Tag className="nt-role-tag">{roleLabels[platformRole]}</Tag>
             </Space>
-            <Space size="small">
-              <Typography.Text style={{ color: '#d7edf5' }}>{userEmail}</Typography.Text>
-              <Tag color={roleTagColors[platformRole]}>{roleLabels[platformRole]}</Tag>
-            </Space>
-            <Button onClick={handleLogout}>退出登录</Button>
-            <Tag color="cyan">React</Tag>
-            <Tag color="geekblue">TypeScript</Tag>
-            <Tag color="gold">Ant Design</Tag>
+            <Button onClick={handleLogout}>Sign Out</Button>
           </Space>
         </Header>
 
-        <Content style={{ padding: 24 }}>
+        <Content
+          style={{
+            padding: 24,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            minHeight: 0,
+          }}
+        >
           <Outlet />
         </Content>
-
-        <Footer style={{ background: 'transparent', color: '#7db0c4' }}>
-          CDN Manage platform shell scaffold for desktop web operations.
-        </Footer>
       </Layout>
     </Layout>
   )

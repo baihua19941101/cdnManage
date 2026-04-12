@@ -30,7 +30,7 @@ describe('AppRouter route guards', () => {
 
     render(<AppRouter />)
 
-    expect(await screen.findByText('Sign in to the control deck')).toBeInTheDocument()
+    expect(await screen.findByText('登录 CDN 管理平台')).toBeInTheDocument()
   })
 
   it('redirects authenticated users from /login to overview', async () => {
@@ -49,6 +49,6 @@ describe('AppRouter route guards', () => {
 
     render(<AppRouter />)
 
-    expect(await screen.findByText('Welcome to CDN Manage workspace')).toBeInTheDocument()
+    expect(await screen.findByText('欢迎使用 CDN 管理平台')).toBeInTheDocument()
   })
 })

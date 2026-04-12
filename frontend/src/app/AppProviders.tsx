@@ -9,7 +9,7 @@ import { useShellStore } from '../store/shell'
 export function AppProviders({ children }: PropsWithChildren) {
   const location = useLocation()
   const themeMode = useShellStore((state) => state.themeMode)
-  const resolvedTheme = location.pathname === '/login' || location.pathname === '/setup' ? 'auth' : themeMode
+  const resolvedTheme = location.pathname === '/login' || location.pathname === '/setup' ? 'dark' : themeMode
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme

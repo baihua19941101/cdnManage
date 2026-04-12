@@ -1,7 +1,7 @@
 import { theme } from 'antd'
 import type { ThemeConfig } from 'antd'
 
-export type ThemeMode = 'light' | 'auth' | 'dark'
+export type ThemeMode = 'light' | 'dark'
 
 type ThemePreset = {
   label: string
@@ -9,56 +9,132 @@ type ThemePreset = {
   surfaceClassName: string
 }
 
-const sharedTypography = {
-  fontFamily: '"Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif',
+const sharedToken = {
+  fontFamily: '"Inter", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+  colorInfo: '#669dff',
+  colorSuccess: '#3ddfb1',
+  colorWarning: '#f2bf5c',
+  colorError: '#ff716c',
+  colorLink: '#81ecff',
+  borderRadius: 12,
+  borderRadiusLG: 16,
+  borderRadiusSM: 8,
+  controlHeight: 38,
+  controlHeightLG: 44,
+  controlOutlineWidth: 2,
+  wireframe: false,
+}
+
+const sharedComponents: NonNullable<ThemeConfig['components']> = {
+  Layout: {
+    bodyBg: 'transparent',
+    headerBg: 'transparent',
+    siderBg: 'transparent',
+  },
+  Card: {
+    bodyPadding: 20,
+  },
+  Button: {
+    borderRadius: 12,
+    controlHeight: 38,
+    controlHeightLG: 44,
+    fontWeight: 600,
+  },
+  Menu: {
+    itemBg: 'transparent',
+    activeBarHeight: 0,
+    itemBorderRadius: 10,
+    itemHeight: 44,
+    itemMarginInline: 10,
+    itemMarginBlock: 6,
+  },
+  Input: {
+    activeBorderColor: '#81ecff',
+    hoverBorderColor: '#8bd7ff',
+  },
+  Segmented: {
+    trackBg: 'rgba(129, 236, 255, 0.1)',
+  },
 }
 
 export const themePresets: Record<ThemeMode, ThemePreset> = {
   light: {
-    label: 'Light',
+    label: '浅色',
     surfaceClassName: 'theme-light',
     theme: {
       algorithm: theme.defaultAlgorithm,
       token: {
-        ...sharedTypography,
-        colorPrimary: '#14708c',
-        colorBgBase: '#edf5f7',
-        colorBgContainer: '#ffffff',
-        colorTextBase: '#17303b',
-        colorBorderSecondary: 'rgba(20, 112, 140, 0.16)',
-        borderRadius: 20,
+        ...sharedToken,
+        colorPrimary: '#0f7f91',
+        colorBgBase: '#eff6fb',
+        colorBgLayout: '#e8f1f8',
+        colorBgContainer: '#f8fcff',
+        colorBgElevated: '#ffffff',
+        colorText: '#2c4553',
+        colorTextHeading: '#2f5365',
+        colorTextSecondary: '#637786',
+        colorBorder: '#bfd2df',
+        colorBorderSecondary: '#d7e3ec',
+        colorFillSecondary: 'rgba(19, 45, 62, 0.05)',
+        boxShadow: '0 20px 42px rgba(41, 85, 110, 0.14)',
       },
-    },
-  },
-  auth: {
-    label: 'Auth',
-    surfaceClassName: 'theme-auth',
-    theme: {
-      algorithm: theme.defaultAlgorithm,
-      token: {
-        ...sharedTypography,
-        colorPrimary: '#9c5b1f',
-        colorBgBase: '#f4ebdc',
-        colorBgContainer: '#fffaf2',
-        colorTextBase: '#2d2118',
-        colorBorderSecondary: 'rgba(156, 91, 31, 0.18)',
-        borderRadius: 24,
+      components: {
+        ...sharedComponents,
+        Button: {
+          ...sharedComponents.Button,
+          primaryShadow: '0 12px 26px rgba(15, 127, 145, 0.26)',
+        },
+        Menu: {
+          ...sharedComponents.Menu,
+          itemSelectedBg: 'rgba(15, 127, 145, 0.12)',
+          itemSelectedColor: '#0b3f49',
+          itemColor: '#325361',
+        },
+        Table: {
+          headerBg: '#eef4f9',
+          headerColor: '#315364',
+          rowHoverBg: '#f7fbff',
+        },
       },
     },
   },
   dark: {
-    label: 'Dark',
+    label: '深色',
     surfaceClassName: 'theme-dark',
     theme: {
       algorithm: theme.darkAlgorithm,
       token: {
-        ...sharedTypography,
-        colorPrimary: '#42d6c8',
-        colorBgBase: '#07131b',
-        colorBgContainer: '#0d1f29',
-        colorTextBase: '#d9ebf2',
-        colorBorderSecondary: 'rgba(125, 176, 196, 0.22)',
-        borderRadius: 20,
+        ...sharedToken,
+        colorPrimary: '#81ecff',
+        colorBgBase: '#0a0e14',
+        colorBgLayout: '#0a0e14',
+        colorBgContainer: '#151a21',
+        colorBgElevated: '#1b2028',
+        colorText: '#f1f3fc',
+        colorTextHeading: '#e8f6ff',
+        colorTextSecondary: '#a8abb3',
+        colorBorder: '#2a323c',
+        colorBorderSecondary: '#222a34',
+        colorFillSecondary: 'rgba(168, 171, 179, 0.12)',
+        boxShadow: '0 24px 48px rgba(3, 8, 13, 0.52)',
+      },
+      components: {
+        ...sharedComponents,
+        Button: {
+          ...sharedComponents.Button,
+          primaryShadow: '0 14px 32px rgba(129, 236, 255, 0.24)',
+        },
+        Menu: {
+          ...sharedComponents.Menu,
+          itemSelectedBg: 'rgba(129, 236, 255, 0.12)',
+          itemSelectedColor: '#b9f4ff',
+          itemColor: '#9ea4b0',
+        },
+        Table: {
+          headerBg: '#171c23',
+          headerColor: '#98a3b4',
+          rowHoverBg: '#131921',
+        },
       },
     },
   },

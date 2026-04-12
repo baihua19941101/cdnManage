@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { createJSONStorage, persist } from 'zustand/middleware'
 
 export type PlatformRole = 'super_admin' | 'platform_admin' | 'standard_user'
 export type UserStatus = 'active' | 'disabled'
@@ -30,34 +31,50 @@ type AuthState = {
   clearSession: () => void
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  user: null,
-  isLoggedIn: false,
-  isInitialized: false,
-  setSession: ({ token, user }) =>
-    set({
-      token,
-      user,
-      isLoggedIn: Boolean(token),
-      isInitialized: true,
-    }),
-  setToken: (token) =>
-    set((state) => ({
-      token,
-      isLoggedIn: Boolean(token),
-      user: token ? state.user : null,
-    })),
-  setUser: (user) =>
-    set((state) => ({
-      user,
-      isLoggedIn: Boolean(state.token),
-    })),
-  setInitialized: (value) => set({ isInitialized: value }),
-  clearSession: () =>
-    set({
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
       token: null,
       user: null,
       isLoggedIn: false,
+      isInitialized: false,
+      setSession: ({ token, user }) =>
+        set({
+          token,
+          user,
+          isLoggedIn: Boolean(token),
+          isInitialized: true,
+        }),
+      setToken: (token) =>
+        set((state) => ({
+          token,
+          isLoggedIn: Boolean(token),
+          user: token ? state.user : null,
+        })),
+      setUser: (user) =>
+        set((state) => ({
+          user,
+          isLoggedIn: Boolean(state.token),
+        })),
+      setInitialized: (value) => set({ isInitialized: value }),
+      clearSession: () =>
+        set({
+          token: null,
+          user: null,
+          isLoggedIn: false,
+        }),
     }),
-}))
+    {
+      name: 'cdnmanage-auth',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        token: state.token,
+        user: state.user,
+        isLoggedIn: state.isLoggedIn,
+      }),
+      onRehydrateStorage: () => (state) => {
+        state?.setInitialized(true)
+      },
+    },
+  ),
+)
