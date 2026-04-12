@@ -246,6 +246,11 @@ h6,
   color: var(--nt-text-primary) !important;
 }
 
+.app-shell-language-select .ant-select-selection-item,
+.app-shell-language-select .ant-select-arrow {
+  color: color-mix(in srgb, var(--nt-text-secondary) 95%, transparent) !important;
+}
+
 .app-shell-caption,
 .app-shell-mark {
   color: var(--nt-text-secondary) !important;

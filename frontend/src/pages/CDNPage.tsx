@@ -13,6 +13,7 @@ import {
   message,
 } from 'antd'
 import { type ReactNode, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 
 import { apiClient } from '../services/api/client'
@@ -71,7 +72,9 @@ const splitByLines = (value: string) =>
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
 
-const OPERATION_META: Record<
+const getOperationMeta = (
+  t: (key: string) => string,
+): Record<
   OperationType,
   {
     tabLabel: string
@@ -83,44 +86,45 @@ const OPERATION_META: Record<
     errorMessage: string
     icon: ReactNode
   }
-> = {
+> => ({
   url: {
-    tabLabel: 'URL 刷新',
-    actionText: '提交 URL 刷新',
-    fieldLabel: 'URLs（每行一个）',
+    tabLabel: t('cdn.tabUrlRefresh'),
+    actionText: t('cdn.tabUrlRefresh'),
+    fieldLabel: t('cdn.urlFieldLabel'),
     placeholder: 'https://cdn.example.com/a.js\nhttps://cdn.example.com/b.css',
-    emptyInputMessage: '请至少输入一个 URL。',
-    successMessage: 'URL 刷新请求已提交。',
-    errorMessage: 'URL 刷新请求提交失败。',
+    emptyInputMessage: t('cdn.urlEmpty'),
+    successMessage: t('cdn.urlSuccess'),
+    errorMessage: t('cdn.urlError'),
     icon: <LinkOutlined />,
   },
   directory: {
-    tabLabel: '目录刷新',
-    actionText: '提交目录刷新',
-    fieldLabel: 'Directories（每行一个）',
+    tabLabel: t('cdn.tabDirectoryRefresh'),
+    actionText: t('cdn.tabDirectoryRefresh'),
+    fieldLabel: t('cdn.directoryFieldLabel'),
     placeholder: '/static/\n/assets/images/',
-    emptyInputMessage: '请至少输入一个目录。',
-    successMessage: '目录刷新请求已提交。',
-    errorMessage: '目录刷新请求提交失败。',
+    emptyInputMessage: t('cdn.directoryEmpty'),
+    successMessage: t('cdn.directorySuccess'),
+    errorMessage: t('cdn.directoryError'),
     icon: <ReloadOutlined />,
   },
   sync: {
-    tabLabel: '资源同步',
-    actionText: '提交资源同步',
-    fieldLabel: 'Paths（每行一个）',
+    tabLabel: t('cdn.tabResourceSync'),
+    actionText: t('cdn.tabResourceSync'),
+    fieldLabel: t('cdn.syncFieldLabel'),
     placeholder: 'dist/app.js\ndist/app.css',
-    emptyInputMessage: '请至少输入一个资源路径。',
-    successMessage: '资源同步请求已提交。',
-    errorMessage: '资源同步请求提交失败。',
+    emptyInputMessage: t('cdn.syncEmpty'),
+    successMessage: t('cdn.syncSuccess'),
+    errorMessage: t('cdn.syncError'),
     icon: <CloudSyncOutlined />,
   },
-}
+})
 
 function TaskResultCard({ result }: { result: CDNTaskResult | null }) {
+  const { t } = useTranslation()
   if (!result) {
     return (
       <Typography.Text type="secondary">
-        暂无任务结果，提交后会展示 providerRequestId/taskId/status/submittedAt/completedAt/metadata。
+        {t('cdn.taskResultPlaceholder')}
       </Typography.Text>
     )
   }
@@ -167,6 +171,7 @@ function TaskResultCard({ result }: { result: CDNTaskResult | null }) {
 }
 
 export function CDNPage() {
+  const { t } = useTranslation()
   const [searchParams] = useSearchParams()
   const [messageApi, messageContext] = message.useMessage()
   const [baseForm] = Form.useForm<BaseFormValues>()
@@ -205,7 +210,8 @@ export function CDNPage() {
   const hasSelectedProject = Boolean(selectedProjectID)
   const disableURLAndDirectorySubmit = !canWrite || (hasSelectedProject && !hasCDNBindings)
   const disableSyncSubmit = !canWrite || (hasSelectedProject && !hasBucketBindings)
-  const activeMeta = OPERATION_META[activeOperation]
+  const operationMeta = getOperationMeta(t)
+  const activeMeta = operationMeta[activeOperation]
   const disableActiveSubmit =
     activeOperation === 'sync' ? disableSyncSubmit : disableURLAndDirectorySubmit
   const showCDNBindingError = hasSelectedProject && !hasCDNBindings
@@ -249,7 +255,7 @@ export function CDNPage() {
       return items
     } catch (error) {
       setProjectOptions([])
-      messageApi.error(resolveAPIErrorMessage(error, '项目列表加载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, t('cdn.loadProjectsFailed')))
       return [] as ProjectOption[]
     } finally {
       setProjectOptionsLoading(false)
@@ -315,7 +321,7 @@ export function CDNPage() {
         cdnEndpoint: '',
         bucketName: '',
       })
-      messageApi.error(resolveAPIErrorMessage(error, '项目绑定加载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, t('cdn.loadBindingsFailed')))
     } finally {
       setBindingsLoading(false)
     }
@@ -419,7 +425,7 @@ export function CDNPage() {
     }
     const bucketName = basePayload.bucketName.trim()
     if (!bucketName) {
-      messageApi.error('请先选择 Bucket Name 后再查询目录。')
+      messageApi.error(t('cdn.selectBucketBeforeQuery'))
       return
     }
 
@@ -442,14 +448,14 @@ export function CDNPage() {
       setDirectoryOptions(directories)
       setSelectedDirectory(undefined)
       if (directories.length === 0) {
-        messageApi.info('当前条件下未查询到目录。')
+        messageApi.info(t('cdn.noDirectories'))
       } else {
-        messageApi.success(`已查询到 ${directories.length} 个目录。`)
+        messageApi.success(t('cdn.directoriesFound', { count: directories.length }))
       }
     } catch (error) {
       setDirectoryOptions([])
       setSelectedDirectory(undefined)
-      messageApi.error(resolveAPIErrorMessage(error, '目录查询失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, t('cdn.queryDirectoriesFailed')))
     } finally {
       setDirectoryQueryLoading(false)
     }
@@ -477,13 +483,13 @@ export function CDNPage() {
     <>
       {messageContext}
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Card title="CDN Refresh & Sync">
+        <Card title={t('pages.cdn.title')}>
           {!canWrite ? (
             <Alert
               type="warning"
               showIcon
               style={{ marginBottom: 12 }}
-              message="当前账号为只读权限，URL 刷新、目录刷新、资源同步提交按钮已禁用。"
+              message={t('cdn.readOnlyDisabled')}
             />
           ) : null}
           <Form<BaseFormValues>
@@ -493,10 +499,10 @@ export function CDNPage() {
             initialValues={{ projectId: '', cdnEndpoint: '', bucketName: '' }}
           >
             <Form.Item
-              label="项目"
+              label={t('cdn.projectLabel')}
               name="projectId"
               rules={[
-                { required: true, message: '请选择项目。' },
+                { required: true, message: t('cdn.selectProject') },
                 {
                   validator: (_, value) => {
                     if (!value) {
@@ -506,13 +512,13 @@ export function CDNPage() {
                     if (Number.isFinite(projectID) && projectID > 0) {
                       return Promise.resolve()
                     }
-                    return Promise.reject(new Error('项目 ID 必须是正整数。'))
+                    return Promise.reject(new Error(t('cdn.projectIdInvalid')))
                   },
                 },
               ]}
             >
               <Select
-                placeholder="请选择项目"
+                placeholder={t('cdn.selectProject')}
                 style={{ width: 220 }}
                 loading={projectOptionsLoading}
                 options={projectOptions.map((project) => ({
@@ -531,7 +537,7 @@ export function CDNPage() {
               validateStatus={showCDNBindingError ? 'error' : undefined}
               help={
                 showCDNBindingError
-                  ? '当前项目未绑定 CDN 域名，请先在项目配置中新增 CDN 绑定。'
+                  ? t('cdn.noCdnBindingShort')
                   : undefined
               }
               rules={[
@@ -543,12 +549,12 @@ export function CDNPage() {
                     }
                     if (!hasCDNBindings) {
                       return Promise.reject(
-                        new Error('当前项目未绑定 CDN 域名，请先在项目配置中新增 CDN 绑定。'),
+                        new Error(t('cdn.noCdnBindingShort')),
                       )
                     }
                     const endpoint = typeof value === 'string' ? value.trim() : ''
                     if (!endpoint) {
-                      return Promise.reject(new Error('请选择 CDN 域名。'))
+                      return Promise.reject(new Error(t('cdn.selectCdn')))
                     }
                     return Promise.resolve()
                   },
@@ -556,7 +562,7 @@ export function CDNPage() {
               ]}
             >
               <Select
-                placeholder="可选，不填时使用后端 primary CDN"
+                placeholder={t('cdn.cdnOptionalPlaceholder')}
                 style={{ width: 320 }}
                 loading={bindingsLoading}
                 options={cdnOptions.map((endpoint) => ({
@@ -572,7 +578,7 @@ export function CDNPage() {
               validateStatus={showBucketBindingError ? 'error' : undefined}
               help={
                 showBucketBindingError
-                  ? '当前项目未绑定 Bucket，请先在项目配置中新增存储桶绑定。'
+                  ? t('cdn.noBucketBindingShort')
                   : undefined
               }
               rules={[
@@ -587,12 +593,12 @@ export function CDNPage() {
                     }
                     if (!hasBucketBindings) {
                       return Promise.reject(
-                        new Error('当前项目未绑定 Bucket，请先在项目配置中新增存储桶绑定。'),
+                        new Error(t('cdn.noBucketBindingShort')),
                       )
                     }
                     const bucketName = typeof value === 'string' ? value.trim() : ''
                     if (!bucketName) {
-                      return Promise.reject(new Error('请选择 Bucket Name。'))
+                      return Promise.reject(new Error(t('cdn.selectBucket')))
                     }
                     return Promise.resolve()
                   },
@@ -600,7 +606,7 @@ export function CDNPage() {
               ]}
             >
               <Select
-                placeholder="同步资源时必填"
+                placeholder={t('cdn.syncBucketRequired')}
                 style={{ width: 240 }}
                 loading={bindingsLoading}
                 options={bucketOptions.map((bucketName) => ({
@@ -616,7 +622,7 @@ export function CDNPage() {
               type="info"
               showIcon
               style={{ marginTop: 12 }}
-              message="当前项目未绑定 CDN 域名，请先在项目配置中绑定 CDN 后再执行 URL 刷新或目录刷新。"
+              message={t('cdn.noCdnBindingLong')}
             />
           ) : null}
           {hasSelectedProject && !hasBucketBindings ? (
@@ -624,13 +630,13 @@ export function CDNPage() {
               type="info"
               showIcon
               style={{ marginTop: 12 }}
-              message="当前项目未绑定 Bucket，请先在项目配置中绑定 Bucket 后再执行资源同步。"
+              message={t('cdn.noBucketBindingLong')}
             />
           ) : null}
         </Card>
 
         <Card
-          title="操作区"
+          title={t('pages.cdn.operationTitle')}
           extra={
             <Button
               type="primary"
@@ -646,17 +652,17 @@ export function CDNPage() {
           {activeOperation === 'directory' ? (
             <Card
               size="small"
-              title="目录查询"
+              title={t('pages.cdn.queryDirectory')}
               style={{ marginBottom: 16 }}
               extra={
                 <Button loading={directoryQueryLoading} onClick={() => void queryDirectoryCandidates()}>
-                  查询目录
+                  {t('pages.cdn.queryDirectory')}
                 </Button>
               }
             >
               <Space wrap>
                 <Input
-                  placeholder="可选前缀，例如 assets/"
+                  placeholder={t('cdn.prefixPlaceholder')}
                   style={{ width: 260 }}
                   value={directoryQueryPrefix}
                   onChange={(event) => {
@@ -664,7 +670,7 @@ export function CDNPage() {
                   }}
                 />
                 <Select
-                  placeholder="选择目录候选"
+                  placeholder={t('cdn.selectDirectory')}
                   style={{ width: 320 }}
                   value={selectedDirectory}
                   onChange={(value) => {
@@ -679,11 +685,11 @@ export function CDNPage() {
                   optionFilterProp="label"
                 />
                 <Button onClick={appendSelectedDirectory} disabled={!selectedDirectory}>
-                  添加到目录输入
+                  {t('pages.cdn.addDirectoryInput')}
                 </Button>
               </Space>
               <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-                当前账号可使用目录查询；仅具备项目写权限的账号可提交刷新/同步操作。
+                {t('cdn.readonlyHint')}
               </Typography.Paragraph>
             </Card>
           ) : null}
@@ -693,9 +699,9 @@ export function CDNPage() {
               setActiveOperation(key as OperationType)
             }}
             items={[
-              { key: 'url', label: OPERATION_META.url.tabLabel },
-              { key: 'directory', label: OPERATION_META.directory.tabLabel },
-              { key: 'sync', label: OPERATION_META.sync.tabLabel },
+              { key: 'url', label: operationMeta.url.tabLabel },
+              { key: 'directory', label: operationMeta.directory.tabLabel },
+              { key: 'sync', label: operationMeta.sync.tabLabel },
             ]}
           />
           <Form form={operationForm} layout="vertical">
@@ -720,14 +726,14 @@ export function CDNPage() {
                         }
                       })
                       if (invalidURL) {
-                        return Promise.reject(new Error(`URL 格式无效：${invalidURL}`))
+                        return Promise.reject(new Error(t('cdn.urlInvalid', { value: invalidURL })))
                       }
                     }
                     if (activeOperation === 'directory') {
                       const invalidDirectory = entries.find((entry) => !entry.startsWith('/'))
                       if (invalidDirectory) {
                         return Promise.reject(
-                          new Error(`目录路径必须以 "/" 开头：${invalidDirectory}`),
+                          new Error(t('cdn.directoryMustStartSlash', { value: invalidDirectory })),
                         )
                       }
                     }
@@ -735,7 +741,7 @@ export function CDNPage() {
                       const invalidPath = entries.find((entry) => entry.startsWith('/'))
                       if (invalidPath) {
                         return Promise.reject(
-                          new Error(`资源路径不能以 "/" 开头：${invalidPath}`),
+                          new Error(t('cdn.syncPathNoSlash', { value: invalidPath })),
                         )
                       }
                     }

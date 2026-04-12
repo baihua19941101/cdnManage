@@ -2,6 +2,7 @@ import axios from 'axios'
 import { Alert, Button, Card, Form, Input, Space, Typography } from 'antd'
 import type { AxiosError } from 'axios'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Navigate, useNavigate } from 'react-router-dom'
 
 import { apiClient } from '../services/api/client'
@@ -61,27 +62,27 @@ const normalizeUser = (value: unknown): AuthUser | null => {
   }
 }
 
-const resolveApiErrorMessage = (error: unknown): string => {
+const resolveApiErrorMessage = (error: unknown, t: (key: string, options?: Record<string, unknown>) => string): string => {
   if (!axios.isAxiosError(error)) {
-    return '登录失败，请稍后重试。'
+    return t('auth.login.failed')
   }
 
   const status = error.response?.status
   if (status === 401) {
-    return '邮箱或密码错误，请检查后重试。'
+    return t('auth.login.invalidCredential')
   }
 
   if (status === 403) {
-    return '当前账号没有登录权限，或账号已被禁用。'
+    return t('auth.login.forbidden')
   }
 
   if (status === 400 || status === 422) {
     const payload = error.response?.data
     if (isRecord(payload) && typeof payload.message === 'string' && payload.message.trim().length > 0) {
-      return `登录参数校验失败：${payload.message}`
+      return t('auth.login.validateFailedWithMessage', { message: payload.message })
     }
 
-    return '登录参数校验失败，请确认邮箱格式和密码是否正确。'
+    return t('auth.login.validateFailed')
   }
 
   const fallback = (error as AxiosError<LoginApiResponse>).response?.data?.message
@@ -89,10 +90,11 @@ const resolveApiErrorMessage = (error: unknown): string => {
     return fallback
   }
 
-  return '登录失败，请稍后重试。'
+  return t('auth.login.failed')
 }
 
 export function LoginPage() {
+  const { t } = useTranslation()
   const [form] = Form.useForm<LoginFormValues>()
   const navigate = useNavigate()
   const isLoggedIn = useAuthStore((state) => state.isLoggedIn)
@@ -114,14 +116,14 @@ export function LoginPage() {
       const authUser = normalizeUser(response.data?.data?.user)
 
       if (typeof accessToken !== 'string' || accessToken.trim().length === 0 || !authUser) {
-        setErrorMessage('登录响应格式不符合预期，请联系管理员。')
+        setErrorMessage(t('auth.login.invalidResponse'))
         return
       }
 
       setSession({ token: accessToken, user: authUser })
       navigate('/', { replace: true })
     } catch (error) {
-      setErrorMessage(resolveApiErrorMessage(error))
+      setErrorMessage(resolveApiErrorMessage(error, t))
     } finally {
       setSubmitting(false)
     }
@@ -131,13 +133,13 @@ export function LoginPage() {
     <div className="auth-scene">
       <Card className="auth-card auth-card--login">
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Typography.Text className="auth-label">身份验证入口</Typography.Text>
+          <Typography.Text className="auth-label">{t('auth.login.entry')}</Typography.Text>
           <Space direction="vertical" size={6} style={{ width: '100%' }}>
             <Typography.Title level={2} className="auth-title">
-              登录 CDN 管理平台
+              {t('auth.login.title')}
             </Typography.Title>
             <Typography.Text className="auth-subtitle">
-              使用平台账号登录，进入资源发布与审计控制台。
+              {t('auth.login.subtitle')}
             </Typography.Text>
           </Space>
 
@@ -158,26 +160,26 @@ export function LoginPage() {
           >
             <Form.Item
               name="email"
-              label="邮箱"
+              label={t('auth.login.email')}
               rules={[
-                { required: true, message: '请输入邮箱地址。' },
-                { type: 'email', message: '请输入有效的邮箱地址。' },
+                { required: true, message: t('auth.login.emailRequired') },
+                { type: 'email', message: t('auth.login.emailInvalid') },
               ]}
             >
               <Input autoComplete="email" placeholder="admin@example.com" size="large" />
             </Form.Item>
             <Form.Item
               name="password"
-              label="密码"
+              label={t('auth.login.password')}
               rules={[
-                { required: true, message: '请输入密码。' },
-                { min: 6, message: '密码长度至少为 6 位。' },
+                { required: true, message: t('auth.login.passwordRequired') },
+                { min: 6, message: t('auth.login.passwordMin') },
               ]}
             >
               <Input.Password autoComplete="current-password" placeholder="••••••••" size="large" />
             </Form.Item>
             <Button className="auth-submit" type="primary" htmlType="submit" loading={submitting} block size="large">
-              登录
+              {t('auth.login.submit')}
             </Button>
           </Form>
         </Space>
