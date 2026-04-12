@@ -28,7 +28,9 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import axios from 'axios'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
+import i18n from '../i18n'
 import { apiClient } from '../services/api/client'
 import { validateProjectBindingCounts } from './managementValidation'
 import { isPlatformAdminRole, useAuthStore } from '../store/auth'
@@ -192,6 +194,8 @@ const parseBindingPath = (rawPath: string): (string | number)[] | null => {
   return [match[1], index, match[3]]
 }
 
+const trGlobal = (zh: string, en: string) => (i18n.language === 'en-US' ? en : zh)
+
 const resolveProviderRegistrationFieldError = (error: unknown): BindingFieldError | null => {
   if (!axios.isAxiosError(error)) {
     return null
@@ -226,11 +230,17 @@ const resolveProviderRegistrationFieldError = (error: unknown): BindingFieldErro
     typeof detailsRecord.bindingPath === 'string' ? detailsRecord.bindingPath : ''
   const parsedPath = parseBindingPath(bindingPathText) ?? [bindingType, bindingIndex, 'providerType']
 
-  const bindingLabel = bindingType === 'cdns' ? 'CDN 绑定' : '存储桶绑定'
+  const bindingLabel = bindingType === 'cdns' ? trGlobal('CDN 绑定', 'CDN Binding') : trGlobal('存储桶绑定', 'Bucket Binding')
   return {
     fieldPath: parsedPath,
-    fieldMessage: `${bindingLabel} #${bindingIndex + 1} 的 Provider（${providerType}）未在当前服务实例注册。`,
-    toastMessage: `${bindingLabel} #${bindingIndex + 1} Provider 未注册，请检查后端 Provider 注册配置后重试。`,
+    fieldMessage: trGlobal(
+      `${bindingLabel} #${bindingIndex + 1} 的 Provider（${providerType}）未在当前服务实例注册。`,
+      `${bindingLabel} #${bindingIndex + 1} provider (${providerType}) is not registered in current service instance.`,
+    ),
+    toastMessage: trGlobal(
+      `${bindingLabel} #${bindingIndex + 1} Provider 未注册，请检查后端 Provider 注册配置后重试。`,
+      `${bindingLabel} #${bindingIndex + 1} provider is not registered. Please check backend provider registration and retry.`,
+    ),
   }
 }
 
@@ -267,28 +277,46 @@ const resolveCredentialOperationFieldError = (error: unknown): BindingFieldError
   const bindingPathText =
     typeof detailsRecord.bindingPath === 'string' ? detailsRecord.bindingPath : ''
   const parsedPath = parseBindingPath(bindingPathText) ?? [bindingType, bindingIndex, 'credentialOperation']
-  const bindingLabel = bindingType === 'cdns' ? 'CDN 绑定' : '存储桶绑定'
+  const bindingLabel = bindingType === 'cdns' ? trGlobal('CDN 绑定', 'CDN Binding') : trGlobal('存储桶绑定', 'Bucket Binding')
 
   if (code === 'provider_change_requires_credential_replace') {
     return {
       fieldPath: [bindingType, bindingIndex, 'providerType'],
-      fieldMessage: `${bindingLabel} #${bindingIndex + 1} 修改了 Provider，需开启“更新凭据”并填写 AK/SK。`,
-      toastMessage: `${bindingLabel} #${bindingIndex + 1} 已修改 Provider，请开启“更新凭据”后再提交。`,
+      fieldMessage: trGlobal(
+        `${bindingLabel} #${bindingIndex + 1} 修改了 Provider，需开启“更新凭据”并填写 AK/SK。`,
+        `${bindingLabel} #${bindingIndex + 1} changed provider. Enable credential update and provide AK/SK.`,
+      ),
+      toastMessage: trGlobal(
+        `${bindingLabel} #${bindingIndex + 1} 已修改 Provider，请开启“更新凭据”后再提交。`,
+        `${bindingLabel} #${bindingIndex + 1} provider changed. Enable credential update before submit.`,
+      ),
     }
   }
 
   if (code === 'credential_missing_for_new_binding') {
     return {
       fieldPath: [bindingType, bindingIndex, 'accessKeyId'],
-      fieldMessage: `${bindingLabel} #${bindingIndex + 1} 为新增绑定，必须填写 AK/SK。`,
-      toastMessage: `${bindingLabel} #${bindingIndex + 1} 是新增绑定，请填写 AK/SK 后重试。`,
+      fieldMessage: trGlobal(
+        `${bindingLabel} #${bindingIndex + 1} 为新增绑定，必须填写 AK/SK。`,
+        `${bindingLabel} #${bindingIndex + 1} is a new binding and requires AK/SK.`,
+      ),
+      toastMessage: trGlobal(
+        `${bindingLabel} #${bindingIndex + 1} 是新增绑定，请填写 AK/SK 后重试。`,
+        `${bindingLabel} #${bindingIndex + 1} is new. Please provide AK/SK and retry.`,
+      ),
     }
   }
 
   return {
     fieldPath: parsedPath[0] === bindingType ? [bindingType, bindingIndex, 'replaceCredential'] : parsedPath,
-    fieldMessage: `${bindingLabel} #${bindingIndex + 1} 无可用历史凭据，需开启“更新凭据”并填写 AK/SK。`,
-    toastMessage: `${bindingLabel} #${bindingIndex + 1} 无法保留历史凭据，请切换为“更新凭据”。`,
+    fieldMessage: trGlobal(
+      `${bindingLabel} #${bindingIndex + 1} 无可用历史凭据，需开启“更新凭据”并填写 AK/SK。`,
+      `${bindingLabel} #${bindingIndex + 1} has no existing credential. Enable credential update and provide AK/SK.`,
+    ),
+    toastMessage: trGlobal(
+      `${bindingLabel} #${bindingIndex + 1} 无法保留历史凭据，请切换为“更新凭据”。`,
+      `${bindingLabel} #${bindingIndex + 1} cannot keep previous credential. Switch to credential update mode.`,
+    ),
   }
 }
 
@@ -302,6 +330,8 @@ const shouldReplaceCredential = (
 ) => mode === 'create' || !isExistingBinding(bindingId) || Boolean(replaceCredential)
 
 export function ProjectsPage() {
+  const { t, i18n } = useTranslation()
+  const tr = (zh: string, en: string) => (i18n.language === 'en-US' ? en : zh)
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const canWrite = isPlatformAdminRole(platformRole)
   const [messageApi, messageContext] = message.useMessage()
@@ -338,7 +368,7 @@ export function ProjectsPage() {
         setSelectedProjectId(items[0].id)
       }
     } catch (error) {
-      setListError(resolveErrorMessage(error, '项目列表加载失败，请稍后重试。'))
+      setListError(resolveErrorMessage(error, tr('项目列表加载失败，请稍后重试。', 'Failed to load project list.')))
     } finally {
       setLoadingList(false)
     }
@@ -352,7 +382,7 @@ export function ProjectsPage() {
       setSelectedProject(response.data.data)
     } catch (error) {
       setSelectedProject(null)
-      setDetailError(resolveErrorMessage(error, '项目详情加载失败，请稍后重试。'))
+      setDetailError(resolveErrorMessage(error, tr('项目详情加载失败，请稍后重试。', 'Failed to load project details.')))
     } finally {
       setLoadingDetail(false)
     }
@@ -481,7 +511,7 @@ export function ProjectsPage() {
         ) {
           providerChangeFieldErrors.push({
             name: ['buckets', index, 'providerType'],
-            errors: ['Provider 已变更，请开启“更新凭据”并填写 AK/SK 后再提交。'],
+            errors: [tr('Provider 已变更，请开启“更新凭据”并填写 AK/SK 后再提交。', 'Provider changed. Enable credential update and provide AK/SK before submit.')],
           })
         }
 
@@ -515,7 +545,7 @@ export function ProjectsPage() {
         ) {
           providerChangeFieldErrors.push({
             name: ['cdns', index, 'providerType'],
-            errors: ['Provider 已变更，请开启“更新凭据”并填写 AK/SK 后再提交。'],
+            errors: [tr('Provider 已变更，请开启“更新凭据”并填写 AK/SK 后再提交。', 'Provider changed. Enable credential update and provide AK/SK before submit.')],
           })
         }
 
@@ -536,7 +566,7 @@ export function ProjectsPage() {
 
     if (providerChangeFieldErrors.length > 0) {
       form.setFields(providerChangeFieldErrors as Parameters<typeof form.setFields>[0])
-      messageApi.error('检测到 Provider 已变更且仍为“保留凭据”，请开启“更新凭据”并填写 AK/SK。')
+      messageApi.error(tr('检测到 Provider 已变更且仍为“保留凭据”，请开启“更新凭据”并填写 AK/SK。', 'Provider has changed while credential mode is KEEP. Please switch to REPLACE and provide AK/SK.'))
       return
     }
 
@@ -545,7 +575,7 @@ export function ProjectsPage() {
       if (projectModalMode === 'create') {
         const response = await apiClient.post<ApiResponse<Project>>('/projects', payload)
         const createdProject = response.data.data
-        messageApi.success('项目已创建。')
+        messageApi.success(tr('项目已创建。', 'Project created.'))
         setEditVisible(false)
         await fetchProjects(queryName.trim() || undefined)
         if (createdProject?.id) {
@@ -556,7 +586,7 @@ export function ProjectsPage() {
       }
 
       await apiClient.put<ApiResponse<Project>>(`/projects/${selectedProjectId}`, payload)
-      messageApi.success('项目配置已更新。')
+      messageApi.success(tr('项目配置已更新。', 'Project config updated.'))
       setEditVisible(false)
       await fetchProjects(queryName.trim() || undefined)
       if (selectedProjectId) {
@@ -591,8 +621,8 @@ export function ProjectsPage() {
         resolveErrorMessage(
           error,
           projectModalMode === 'create'
-            ? '项目创建失败，请检查输入后重试。'
-            : '项目更新失败，请检查输入后重试。',
+            ? tr('项目创建失败，请检查输入后重试。', 'Project creation failed. Please check input and retry.')
+            : tr('项目更新失败，请检查输入后重试。', 'Project update failed. Please check input and retry.'),
         ),
       )
     } finally {
@@ -607,19 +637,19 @@ export function ProjectsPage() {
       width: 90,
     },
     {
-      title: '项目名称',
+      title: t('pages.projects.table.name'),
       dataIndex: 'name',
       render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
     },
     {
-      title: '描述',
+      title: t('pages.projects.table.description'),
       dataIndex: 'description',
       ellipsis: true,
       render: (value: string) =>
-        value?.trim().length > 0 ? value : <Typography.Text type="secondary">未填写</Typography.Text>,
+        value?.trim().length > 0 ? value : <Typography.Text type="secondary">{tr('未填写', 'Not set')}</Typography.Text>,
     },
     {
-      title: '创建时间',
+      title: t('pages.projects.table.createdAt'),
       dataIndex: 'createdAt',
       width: 220,
     },
@@ -630,11 +660,11 @@ export function ProjectsPage() {
       {messageContext}
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Card
-          title="Projects"
+          title={t('pages.projects.listTitle')}
           extra={
             <Space>
               <Input.Search
-                placeholder="按名称过滤项目"
+                placeholder={tr('按名称过滤项目', 'Filter projects by name')}
                 allowClear
                 onSearch={(value) => {
                   setQueryName(value)
@@ -646,7 +676,7 @@ export function ProjectsPage() {
                 icon={<ReloadOutlined />}
                 onClick={() => void fetchProjects(queryName.trim() || undefined)}
               >
-                刷新
+                {t('pages.projects.refresh')}
               </Button>
               <Button
                 type="primary"
@@ -654,7 +684,7 @@ export function ProjectsPage() {
                 onClick={openCreateModal}
                 disabled={!canWrite}
               >
-                新建项目
+                {t('pages.projects.create')}
               </Button>
             </Space>
           }
@@ -683,7 +713,7 @@ export function ProjectsPage() {
         </Card>
 
         <Card
-          title="Project Detail"
+          title={t('pages.projects.detailTitle')}
           extra={
             <Button
               type="primary"
@@ -691,7 +721,7 @@ export function ProjectsPage() {
               onClick={openEditModal}
               disabled={!selectedProject || !canWrite}
             >
-              编辑项目
+              {t('pages.projects.edit')}
             </Button>
           }
         >
@@ -700,7 +730,7 @@ export function ProjectsPage() {
               type="warning"
               showIcon
               style={{ marginBottom: 12 }}
-              message="当前账号为只读权限，项目写操作入口已禁用。"
+              message={t('pages.projects.readOnlyHint')}
             />
           ) : null}
           {loadingDetail ? (
@@ -708,7 +738,7 @@ export function ProjectsPage() {
           ) : detailError ? (
             <Alert type="error" showIcon message={detailError} />
           ) : !selectedProject ? (
-            <Empty description="请选择一个项目查看详情" />
+            <Empty description={t('pages.projects.empty')} />
           ) : (
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
               <div>
@@ -718,10 +748,10 @@ export function ProjectsPage() {
                 <Typography.Paragraph style={{ marginTop: 8, marginBottom: 4 }}>
                   {selectedProject.description?.trim().length
                     ? selectedProject.description
-                    : '该项目尚未填写描述。'}
+                    : tr('该项目尚未填写描述。', 'No description for this project yet.')}
                 </Typography.Paragraph>
                 <Typography.Text type="secondary">
-                  创建时间：{selectedProject.createdAt}
+                  {tr('创建时间：', 'Created at: ')}{selectedProject.createdAt}
                 </Typography.Text>
               </div>
 
@@ -729,7 +759,7 @@ export function ProjectsPage() {
 
               <Row gutter={[16, 16]}>
                 <Col xs={24} lg={12}>
-                  <Card size="small" title="存储桶绑定">
+                  <Card size="small" title={tr('存储桶绑定', 'Bucket Bindings')}>
                     {selectedProject.buckets?.length ? (
                       <List
                         size="small"
@@ -755,13 +785,13 @@ export function ProjectsPage() {
                         )}
                       />
                     ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无存储桶绑定" />
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr('暂无存储桶绑定', 'No bucket bindings')} />
                     )}
                   </Card>
                 </Col>
 
                 <Col xs={24} lg={12}>
-                  <Card size="small" title="CDN 绑定">
+                  <Card size="small" title={tr('CDN 绑定', 'CDN Bindings')}>
                     {selectedProject.cdns?.length ? (
                       <List
                         size="small"
@@ -771,7 +801,7 @@ export function ProjectsPage() {
                             <Space direction="vertical" size={0}>
                               <Space size={8}>
                                 <Typography.Text strong>
-                                  CDN 域名: {cdn.cdnEndpoint}
+                                  {tr('CDN 域名: ', 'CDN Domain: ')}{cdn.cdnEndpoint}
                                 </Typography.Text>
                                 <Tag color={providerTagColor[cdn.providerType] ?? 'default'}>
                                   {cdn.providerType}
@@ -792,7 +822,7 @@ export function ProjectsPage() {
                         )}
                       />
                     ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 CDN 绑定" />
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr('暂无 CDN 绑定', 'No CDN bindings')} />
                     )}
                   </Card>
                 </Col>
@@ -803,7 +833,7 @@ export function ProjectsPage() {
       </Space>
 
       <Modal
-        title={projectModalMode === 'create' ? '新建项目' : '编辑项目配置'}
+        title={projectModalMode === 'create' ? tr('新建项目', 'Create Project') : tr('编辑项目配置', 'Edit Project Config')}
         open={editVisible}
         onCancel={() => setEditVisible(false)}
         onOk={() => void submitProject()}
@@ -817,23 +847,23 @@ export function ProjectsPage() {
           style={{ marginBottom: 16 }}
           message={
             projectModalMode === 'create'
-              ? '项目可先空配置创建；新增绑定默认需要填写 AK/SK 并执行凭据替换。'
-              : '编辑模式下已有绑定默认“保留凭据”。如需更换凭据，请开启“更新凭据”并填写 AK/SK。'
+              ? tr('项目可先空配置创建；新增绑定默认需要填写 AK/SK 并执行凭据替换。', 'Project can be created with empty bindings first. New bindings default to REPLACE and require AK/SK.')
+              : tr('编辑模式下已有绑定默认“保留凭据”。如需更换凭据，请开启“更新凭据”并填写 AK/SK。', 'In edit mode existing bindings default to KEEP. To update credentials, switch to REPLACE and provide AK/SK.')
           }
         />
         <Form<EditProjectFormValues> form={form} layout="vertical">
           <Form.Item
-            label="项目名称"
+            label={tr('项目名称', 'Project Name')}
             name="name"
-            rules={[{ required: true, message: '请输入项目名称' }]}
+            rules={[{ required: true, message: tr('请输入项目名称', 'Please input project name') }]}
           >
             <Input />
           </Form.Item>
-          <Form.Item label="项目描述" name="description">
+          <Form.Item label={tr('项目描述', 'Project Description')} name="description">
             <Input.TextArea rows={3} />
           </Form.Item>
 
-          <Divider>存储桶绑定（0~2）</Divider>
+          <Divider>{tr('存储桶绑定（0~2）', 'Bucket Bindings (0~2)')}</Divider>
           <Form.List name="buckets">
             {(fields, { add, remove }) => (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -856,7 +886,7 @@ export function ProjectsPage() {
                   }
                   disabled={fields.length >= 2}
                 >
-                  添加存储桶绑定
+                  {tr('添加存储桶绑定', 'Add Bucket Binding')}
                 </Button>
                 {fields.map((field, index) => (
                   <Form.Item
@@ -902,7 +932,7 @@ export function ProjectsPage() {
                                 onClick={() => remove(field.name)}
                                 size="small"
                               >
-                                删除
+                                {tr('删除', 'Delete')}
                               </Button>
                             </Space>
                           }
@@ -918,7 +948,7 @@ export function ProjectsPage() {
                               <Form.Item
                                 label="Provider"
                                 name={[field.name, 'providerType']}
-                                rules={[{ required: true, message: '请选择 Provider' }]}
+                                rules={[{ required: true, message: tr('请选择 Provider', 'Please select provider') }]}
                               >
                                 <Select options={providerOptions} />
                               </Form.Item>
@@ -927,7 +957,7 @@ export function ProjectsPage() {
                               <Form.Item
                                 label="BucketName"
                                 name={[field.name, 'bucketName']}
-                                rules={[{ required: true, message: '请输入 BucketName' }]}
+                                rules={[{ required: true, message: tr('请输入 BucketName', 'Please input BucketName') }]}
                               >
                                 <Input />
                               </Form.Item>
@@ -936,8 +966,8 @@ export function ProjectsPage() {
                               <Form.Item
                                 label="Region"
                                 name={[field.name, 'region']}
-                                rules={[{ required: true, message: '请输入 Region' }]}
-                                extra="阿里云请填写 Region ID（如 cn-beijing）。可从 OSS 外网域名提取，例如 oss-cn-beijing.aliyuncs.com 对应 cn-beijing。"
+                                rules={[{ required: true, message: tr('请输入 Region', 'Please input Region') }]}
+                                extra={tr('阿里云请填写 Region ID（如 cn-beijing）。可从 OSS 外网域名提取，例如 oss-cn-beijing.aliyuncs.com 对应 cn-beijing。', 'For Aliyun please fill Region ID (e.g. cn-beijing). You can extract it from OSS public endpoint.')}
                               >
                                 <Input />
                               </Form.Item>
@@ -946,19 +976,19 @@ export function ProjectsPage() {
 
                           {existingBindingInEdit ? (
                             <Form.Item
-                              label="更新凭据"
+                              label={tr('更新凭据', 'Update Credential')}
                               name={[field.name, 'replaceCredential']}
                               valuePropName="checked"
-                              extra="默认保留历史凭据。开启后将提交 REPLACE，并要求填写 AK/SK。"
+                              extra={tr('默认保留历史凭据。开启后将提交 REPLACE，并要求填写 AK/SK。', 'Defaults to keep existing credential. Enable to submit REPLACE and require AK/SK.')}
                             >
-                              <Switch checkedChildren="开启" unCheckedChildren="保留" />
+                              <Switch checkedChildren={tr('开启', 'On')} unCheckedChildren={tr('保留', 'Keep')} />
                             </Form.Item>
                           ) : (
                             <Alert
                               type="info"
                               showIcon
                               style={{ marginBottom: 12 }}
-                              message="新增绑定默认使用 REPLACE，请填写 AK/SK。"
+                              message={tr('新增绑定默认使用 REPLACE，请填写 AK/SK。', 'New binding defaults to REPLACE. Please fill AK/SK.')}
                             />
                           )}
 
@@ -968,7 +998,7 @@ export function ProjectsPage() {
                                 <Form.Item
                                   label="AccessKeyId"
                                   name={[field.name, 'accessKeyId']}
-                                  rules={[{ required: true, message: '请输入 AccessKeyId' }]}
+                                  rules={[{ required: true, message: tr('请输入 AccessKeyId', 'Please input AccessKeyId') }]}
                                 >
                                   <Input />
                                 </Form.Item>
@@ -977,7 +1007,7 @@ export function ProjectsPage() {
                                 <Form.Item
                                   label="AccessKeySecret"
                                   name={[field.name, 'accessKeySecret']}
-                                  rules={[{ required: true, message: '请输入 AccessKeySecret' }]}
+                                  rules={[{ required: true, message: tr('请输入 AccessKeySecret', 'Please input AccessKeySecret') }]}
                                 >
                                   <Input.Password />
                                 </Form.Item>
@@ -992,7 +1022,7 @@ export function ProjectsPage() {
                             <Alert
                               type="success"
                               showIcon
-                              message="当前为保留凭据（KEEP）模式，无需填写 AK/SK。"
+                              message={tr('当前为保留凭据（KEEP）模式，无需填写 AK/SK。', 'Current mode is KEEP; AK/SK is not required.')}
                             />
                           )}
                         </Card>
@@ -1004,14 +1034,14 @@ export function ProjectsPage() {
                   <Alert
                     type="info"
                     showIcon
-                    message="当前未绑定存储桶。可以先创建项目，后续再补充绑定。"
+                    message={tr('当前未绑定存储桶。可以先创建项目，后续再补充绑定。', 'No bucket binding currently. You can create project first and bind later.')}
                   />
                 ) : null}
               </Space>
             )}
           </Form.List>
 
-          <Divider>CDN 绑定（0~2）</Divider>
+          <Divider>{tr('CDN 绑定（0~2）', 'CDN Bindings (0~2)')}</Divider>
           <Form.List name="cdns">
             {(fields, { add, remove }) => (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -1035,7 +1065,7 @@ export function ProjectsPage() {
                   }
                   disabled={fields.length >= 2}
                 >
-                  添加 CDN 绑定
+                  {tr('添加 CDN 绑定', 'Add CDN Binding')}
                 </Button>
                 {fields.map((field, index) => (
                   <Form.Item
@@ -1081,7 +1111,7 @@ export function ProjectsPage() {
                                 onClick={() => remove(field.name)}
                                 size="small"
                               >
-                                删除
+                                {tr('删除', 'Delete')}
                               </Button>
                             </Space>
                           }
@@ -1097,16 +1127,16 @@ export function ProjectsPage() {
                               <Form.Item
                                 label="Provider"
                                 name={[field.name, 'providerType']}
-                                rules={[{ required: true, message: '请选择 Provider' }]}
+                                rules={[{ required: true, message: tr('请选择 Provider', 'Please select provider') }]}
                               >
                                 <Select options={providerOptions} />
                               </Form.Item>
                             </Col>
                             <Col span={8}>
                               <Form.Item
-                                label="CDN 域名"
+                                label={tr('CDN 域名', 'CDN Domain')}
                                 name={[field.name, 'cdnEndpoint']}
-                                rules={[{ required: true, message: '请输入 CDN 域名' }]}
+                                rules={[{ required: true, message: tr('请输入 CDN 域名', 'Please input CDN domain') }]}
                               >
                                 <Input />
                               </Form.Item>
@@ -1115,7 +1145,7 @@ export function ProjectsPage() {
                               <Form.Item
                                 label="Region"
                                 name={[field.name, 'region']}
-                                extra="可选，默认使用 Provider fallback。阿里云请填写 Region ID（如 cn-beijing）。若有 OSS 外网域名（如 oss-cn-beijing.aliyuncs.com），可提取 cn-beijing。"
+                                extra={tr('可选，默认使用 Provider fallback。阿里云请填写 Region ID（如 cn-beijing）。若有 OSS 外网域名（如 oss-cn-beijing.aliyuncs.com），可提取 cn-beijing。', 'Optional. Uses provider fallback by default. For Aliyun fill Region ID (e.g. cn-beijing).')}
                               >
                                 <Input />
                               </Form.Item>
@@ -1124,19 +1154,19 @@ export function ProjectsPage() {
 
                           {existingBindingInEdit ? (
                             <Form.Item
-                              label="更新凭据"
+                              label={tr('更新凭据', 'Update Credential')}
                               name={[field.name, 'replaceCredential']}
                               valuePropName="checked"
-                              extra="默认保留历史凭据。开启后将提交 REPLACE，并要求填写 AK/SK。"
+                              extra={tr('默认保留历史凭据。开启后将提交 REPLACE，并要求填写 AK/SK。', 'Defaults to keep existing credential. Enable to submit REPLACE and require AK/SK.')}
                             >
-                              <Switch checkedChildren="开启" unCheckedChildren="保留" />
+                              <Switch checkedChildren={tr('开启', 'On')} unCheckedChildren={tr('保留', 'Keep')} />
                             </Form.Item>
                           ) : (
                             <Alert
                               type="info"
                               showIcon
                               style={{ marginBottom: 12 }}
-                              message="新增绑定默认使用 REPLACE，请填写 AK/SK。"
+                              message={tr('新增绑定默认使用 REPLACE，请填写 AK/SK。', 'New binding defaults to REPLACE. Please fill AK/SK.')}
                             />
                           )}
 
@@ -1146,7 +1176,7 @@ export function ProjectsPage() {
                                 <Form.Item
                                   label="AccessKeyId"
                                   name={[field.name, 'accessKeyId']}
-                                  rules={[{ required: true, message: '请输入 AccessKeyId' }]}
+                                  rules={[{ required: true, message: tr('请输入 AccessKeyId', 'Please input AccessKeyId') }]}
                                 >
                                   <Input />
                                 </Form.Item>
@@ -1155,7 +1185,7 @@ export function ProjectsPage() {
                                 <Form.Item
                                   label="AccessKeySecret"
                                   name={[field.name, 'accessKeySecret']}
-                                  rules={[{ required: true, message: '请输入 AccessKeySecret' }]}
+                                  rules={[{ required: true, message: tr('请输入 AccessKeySecret', 'Please input AccessKeySecret') }]}
                                 >
                                   <Input.Password />
                                 </Form.Item>
@@ -1170,7 +1200,7 @@ export function ProjectsPage() {
                             <Alert
                               type="success"
                               showIcon
-                              message="当前为保留凭据（KEEP）模式，无需填写 AK/SK。"
+                              message={tr('当前为保留凭据（KEEP）模式，无需填写 AK/SK。', 'Current mode is KEEP; AK/SK is not required.')}
                             />
                           )}
                         </Card>
@@ -1182,7 +1212,7 @@ export function ProjectsPage() {
                   <Alert
                     type="info"
                     showIcon
-                    message="当前未绑定 CDN。可以先创建项目，后续再补充绑定。"
+                    message={tr('当前未绑定 CDN。可以先创建项目，后续再补充绑定。', 'No CDN binding currently. You can create project first and bind later.')}
                   />
                 ) : null}
               </Space>

@@ -18,6 +18,7 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -214,6 +215,8 @@ const parseSearchParams = (
 }
 
 export function AuditsPage() {
+  const { t, i18n } = useTranslation()
+  const tr = (zh: string, en: string) => (i18n.language === 'en-US' ? en : zh)
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
   const [searchParams] = useSearchParams()
@@ -280,8 +283,10 @@ export function AuditsPage() {
       setProjectOptions([])
       setProjectActions([])
       setProjectTargetTypes([])
-      setProjectFieldHint('Project ID 选项加载失败，请稍后重试。')
-      setProjectFilterOptionsError(resolveAPIErrorMessage(error, '项目级审计筛选项目列表加载失败。'))
+      setProjectFieldHint(tr('Project ID 选项加载失败，请稍后重试。', 'Failed to load Project ID options.'))
+      setProjectFilterOptionsError(
+        resolveAPIErrorMessage(error, tr('项目级审计筛选项目列表加载失败。', 'Failed to load project list for project-scoped audit filters.')),
+      )
     }
   }
 
@@ -341,10 +346,10 @@ export function AuditsPage() {
       } catch (error) {
         setPlatformActions([])
         setPlatformTargetTypes([])
-        setActionFieldHint('Action 选项加载失败，请稍后重试。')
-        setTargetTypeFieldHint('Target Type 选项加载失败，请稍后重试。')
+        setActionFieldHint(tr('Action 选项加载失败，请稍后重试。', 'Failed to load Action options.'))
+        setTargetTypeFieldHint(tr('Target Type 选项加载失败，请稍后重试。', 'Failed to load Target Type options.'))
         setPlatformFilterOptionsError(
-          resolveAPIErrorMessage(error, '审计筛选选项加载失败，可直接查询全部日志。'),
+          resolveAPIErrorMessage(error, tr('审计筛选选项加载失败，可直接查询全部日志。', 'Failed to load audit filter options. You can still query all logs.')),
         )
       } finally {
         setPlatformFilterOptionsLoading(false)
@@ -420,10 +425,10 @@ export function AuditsPage() {
       } catch (error) {
         setProjectActions([])
         setProjectTargetTypes([])
-        setActionFieldHint('Action 选项加载失败，请稍后重试。')
-        setTargetTypeFieldHint('Target Type 选项加载失败，请稍后重试。')
+        setActionFieldHint(tr('Action 选项加载失败，请稍后重试。', 'Failed to load Action options.'))
+        setTargetTypeFieldHint(tr('Target Type 选项加载失败，请稍后重试。', 'Failed to load Target Type options.'))
         setProjectFilterOptionsError(
-          resolveAPIErrorMessage(error, '项目级审计筛选选项加载失败，可直接查询全部日志。'),
+          resolveAPIErrorMessage(error, tr('项目级审计筛选选项加载失败，可直接查询全部日志。', 'Failed to load project-scoped audit filter options. You can still query all logs.')),
         )
       } finally {
         setProjectFilterOptionsLoading(false)
@@ -440,14 +445,15 @@ export function AuditsPage() {
 
     setScopeFieldHint(null)
     setProjectFieldHint((current) =>
-      current === '筛选上下文无效，请先选择有效的 Project ID。' || current === '查询失败，请检查 Project ID 后重试。'
+      current === tr('筛选上下文无效，请先选择有效的 Project ID。', 'Invalid filter context. Please select a valid Project ID.')
+      || current === tr('查询失败，请检查 Project ID 后重试。', 'Query failed. Please verify Project ID and retry.')
         ? null
         : current,
     )
     const values = await queryForm.validateFields().catch(() => null)
     if (!values) {
-      setQueryError('筛选条件校验失败，请修正带提示的字段后重试。')
-      messageApi.error('筛选条件校验失败，请检查表单提示。')
+      setQueryError(tr('筛选条件校验失败，请修正带提示的字段后重试。', 'Filter validation failed. Please fix highlighted fields and retry.'))
+      messageApi.error(tr('筛选条件校验失败，请检查表单提示。', 'Filter validation failed. Please check form hints.'))
       return
     }
 
@@ -459,9 +465,9 @@ export function AuditsPage() {
       if (values.scope === 'project') {
         const projectID = Number(values.projectId)
         if (!Number.isFinite(projectID) || projectID <= 0) {
-          setProjectFieldHint('筛选上下文无效，请先选择有效的 Project ID。')
-          setQueryError('筛选上下文无效，请先选择有效的 Project ID。')
-          messageApi.error('Project ID 必须是正整数。')
+          setProjectFieldHint(tr('筛选上下文无效，请先选择有效的 Project ID。', 'Invalid filter context. Please select a valid Project ID.'))
+          setQueryError(tr('筛选上下文无效，请先选择有效的 Project ID。', 'Invalid filter context. Please select a valid Project ID.'))
+          messageApi.error(tr('Project ID 必须是正整数。', 'Project ID must be a positive integer.'))
           setLoading(false)
           return
         }
@@ -481,9 +487,9 @@ export function AuditsPage() {
       }
 
       if (!canQueryPlatformScope) {
-        setScopeFieldHint('筛选上下文无效，当前账号仅支持项目级审计查询。')
-        setQueryError('筛选上下文无效，当前账号仅支持项目级审计查询。')
-        messageApi.error('当前账号仅支持项目级审计查询。')
+        setScopeFieldHint(tr('筛选上下文无效，当前账号仅支持项目级审计查询。', 'Invalid filter context. Current account supports project-scoped query only.'))
+        setQueryError(tr('筛选上下文无效，当前账号仅支持项目级审计查询。', 'Invalid filter context. Current account supports project-scoped query only.'))
+        messageApi.error(tr('当前账号仅支持项目级审计查询。', 'Current account supports project-scoped query only.'))
         setLogs([])
         setLoading(false)
         return
@@ -500,11 +506,11 @@ export function AuditsPage() {
     } catch (error) {
       setLogs([])
       if (values.scope === 'project') {
-        setProjectFieldHint('查询失败，请检查 Project ID 后重试。')
+        setProjectFieldHint(tr('查询失败，请检查 Project ID 后重试。', 'Query failed. Please verify Project ID and retry.'))
       } else {
-        setScopeFieldHint('查询失败，请检查筛选条件后重试。')
+        setScopeFieldHint(tr('查询失败，请检查筛选条件后重试。', 'Query failed. Please verify filters and retry.'))
       }
-      setQueryError(resolveAPIErrorMessage(error, '审计日志查询失败，请稍后重试。'))
+      setQueryError(resolveAPIErrorMessage(error, tr('审计日志查询失败，请稍后重试。', 'Audit query failed. Please retry later.')))
     } finally {
       setLoading(false)
     }
@@ -552,20 +558,20 @@ export function AuditsPage() {
     <>
       {messageContext}
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Card title="Audit Query">
+        <Card title={tr('审计查询', 'Audit Query')}>
           {!canQuery ? (
             <Alert
               type="warning"
               showIcon
               style={{ marginBottom: 12 }}
-              message="当前账号无权限执行审计查询。请联系平台管理员。"
+              message={tr('当前账号无权限执行审计查询。请联系平台管理员。', 'Current account is not allowed to query audits. Contact platform admin.')}
             />
           ) : !canQueryPlatformScope ? (
             <Alert
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="当前账号仅支持项目级审计查询。请输入 Project ID 后查询。"
+              message={tr('当前账号仅支持项目级审计查询。请输入 Project ID 后查询。', 'Current account supports project-scoped query only. Please input Project ID.')}
             />
           ) : null}
           <Form<QueryFormValues>
@@ -587,14 +593,14 @@ export function AuditsPage() {
           >
             <Form.Item
               name="scope"
-              label="查询范围"
+              label={t('audits.scope')}
               validateStatus={scopeFieldHint ? 'error' : undefined}
               help={scopeFieldHint ?? undefined}
             >
               <Segmented<QueryScope>
                 options={[
-                  { label: '平台级', value: 'platform' },
-                  { label: '项目级', value: 'project' },
+                  { label: t('audits.scopePlatform'), value: 'platform' },
+                  { label: t('audits.scopeProject'), value: 'project' },
                 ]}
                 disabled={!canQueryPlatformScope}
               />
@@ -604,14 +610,14 @@ export function AuditsPage() {
               <Form.Item
                 name="projectId"
                 label="Project ID"
-                rules={[{ required: true, message: '请选择 Project ID' }]}
+                rules={[{ required: true, message: tr('请选择 Project ID', 'Please select Project ID') }]}
                 validateStatus={projectFieldHint ? 'error' : undefined}
                 help={projectFieldHint ?? undefined}
               >
                 <Select
                   showSearch
                   allowClear
-                  placeholder="请选择或搜索 Project ID"
+                  placeholder={tr('请选择或搜索 Project ID', 'Select or search Project ID')}
                   style={{ width: 280 }}
                   options={projectOptions.map((project) => ({
                     value: String(project.projectId),
@@ -652,11 +658,11 @@ export function AuditsPage() {
                 <Select
                   showSearch
                   allowClear
-                  placeholder="全部 Action"
+                  placeholder={t('audits.all')}
                   style={{ width: 220 }}
                   loading={platformFilterOptionsLoading}
                   options={platformActions.map((value) => ({ label: value, value }))}
-                  notFoundContent="暂无可选 Action，可直接查询全部。"
+                  notFoundContent={t('audits.actionEmpty')}
                   onChange={() => setActionFieldHint(null)}
                 />
               </Form.Item>
@@ -670,14 +676,14 @@ export function AuditsPage() {
                 <Select
                   showSearch
                   allowClear
-                  placeholder="全部 Action"
+                  placeholder={t('audits.all')}
                   style={{ width: 220 }}
                   loading={projectFilterOptionsLoading}
                   options={projectActions.map((value) => ({ label: value, value }))}
                   notFoundContent={
                     selectedProjectID
-                      ? '暂无可选 Action，可直接查询全部。'
-                      : '请先选择 Project ID。'
+                      ? t('audits.actionEmpty')
+                      : tr('请先选择 Project ID。', 'Please select Project ID first.')
                   }
                   onChange={() => setActionFieldHint(null)}
                 />
@@ -687,7 +693,7 @@ export function AuditsPage() {
             <Form.Item name="result" label="Result">
               <Select<AuditResult>
                 allowClear
-                placeholder="全部"
+                placeholder={t('audits.all')}
                 style={{ width: 160 }}
                 options={[
                   { label: 'success', value: 'success' },
@@ -707,11 +713,11 @@ export function AuditsPage() {
                 <Select
                   showSearch
                   allowClear
-                  placeholder="全部 Target Type"
+                  placeholder={t('audits.all')}
                   style={{ width: 220 }}
                   loading={platformFilterOptionsLoading}
                   options={platformTargetTypes.map((value) => ({ label: value, value }))}
-                  notFoundContent="暂无可选 Target Type，可直接查询全部。"
+                  notFoundContent={t('audits.targetTypeEmpty')}
                   onChange={() => setTargetTypeFieldHint(null)}
                 />
               </Form.Item>
@@ -725,14 +731,14 @@ export function AuditsPage() {
                 <Select
                   showSearch
                   allowClear
-                  placeholder="全部 Target Type"
+                  placeholder={t('audits.all')}
                   style={{ width: 220 }}
                   loading={projectFilterOptionsLoading}
                   options={projectTargetTypes.map((value) => ({ label: value, value }))}
                   notFoundContent={
                     selectedProjectID
-                      ? '暂无可选 Target Type，可直接查询全部。'
-                      : '请先选择 Project ID。'
+                      ? t('audits.targetTypeEmpty')
+                      : tr('请先选择 Project ID。', 'Please select Project ID first.')
                   }
                   onChange={() => setTargetTypeFieldHint(null)}
                 />
@@ -740,23 +746,23 @@ export function AuditsPage() {
             )}
 
             <Form.Item name="targetIdentifier" label="Target Identifier">
-              <Input placeholder="支持模糊匹配" style={{ width: 240 }} />
+              <Input placeholder={t('audits.fuzzyPlaceholder')} style={{ width: 240 }} />
             </Form.Item>
 
             {scope === 'platform' ? (
               <Form.Item
                 name="actorUserId"
                 label="Actor User ID"
-                rules={[{ pattern: /^[1-9]\d*$/, message: 'Actor User ID 必须是正整数' }]}
+                rules={[{ pattern: /^[1-9]\d*$/, message: tr('Actor User ID 必须是正整数', 'Actor User ID must be a positive integer') }]}
               >
-                <Input placeholder="可选" style={{ width: 160 }} />
+                <Input placeholder={t('audits.optional')} style={{ width: 160 }} />
               </Form.Item>
             ) : null}
 
             <Form.Item
               name="limit"
               label="Limit"
-              rules={[{ required: true, message: '请输入 Limit' }]}
+              rules={[{ required: true, message: tr('请输入 Limit', 'Please input Limit') }]}
             >
               <InputNumber min={1} max={200} precision={0} style={{ width: 110 }} />
             </Form.Item>
@@ -764,7 +770,7 @@ export function AuditsPage() {
             <Form.Item
               name="offset"
               label="Offset"
-              rules={[{ required: true, message: '请输入 Offset' }]}
+              rules={[{ required: true, message: tr('请输入 Offset', 'Please input Offset') }]}
             >
               <InputNumber min={0} precision={0} style={{ width: 110 }} />
             </Form.Item>
@@ -777,7 +783,7 @@ export function AuditsPage() {
                 loading={loading}
                 disabled={!canQuery}
               >
-                查询审计日志
+                {t('audits.queryButton')}
               </Button>
             </Form.Item>
           </Form>
@@ -785,12 +791,12 @@ export function AuditsPage() {
             <>
               {platformActions.length === 0 ? (
                 <Typography.Text type="secondary">
-                  当前暂无 Action 可选值，可直接查询全部日志。
+                  {tr('当前暂无 Action 可选值，可直接查询全部日志。', 'No Action options currently. You can query all logs directly.')}
                 </Typography.Text>
               ) : null}
               {platformTargetTypes.length === 0 ? (
                 <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
-                  当前暂无 Target Type 可选值，可直接查询全部日志。
+                  {tr('当前暂无 Target Type 可选值，可直接查询全部日志。', 'No Target Type options currently. You can query all logs directly.')}
                 </Typography.Text>
               ) : null}
             </>
@@ -805,12 +811,12 @@ export function AuditsPage() {
             <>
               {projectActions.length === 0 ? (
                 <Typography.Text type="secondary">
-                  当前项目暂无 Action 可选值，可直接查询全部日志。
+                  {tr('当前项目暂无 Action 可选值，可直接查询全部日志。', 'No Action options for current project. You can query all logs directly.')}
                 </Typography.Text>
               ) : null}
               {projectTargetTypes.length === 0 ? (
                 <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
-                  当前项目暂无 Target Type 可选值，可直接查询全部日志。
+                  {tr('当前项目暂无 Target Type 可选值，可直接查询全部日志。', 'No Target Type options for current project. You can query all logs directly.')}
                 </Typography.Text>
               ) : null}
             </>
@@ -820,7 +826,7 @@ export function AuditsPage() {
           ) : null}
         </Card>
 
-        <Card title="Audit Logs">
+        <Card title={tr('审计日志', 'Audit Logs')}>
           {queryError ? <Alert type="error" showIcon style={{ marginBottom: 12 }} message={queryError} /> : null}
           <Table<AuditLog>
             rowKey={(record) =>
@@ -834,11 +840,11 @@ export function AuditsPage() {
               emptyText: hasSearched ? (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="未查询到审计日志，请调整筛选条件后重试。"
+                  description={tr('未查询到审计日志，请调整筛选条件后重试。', 'No audit logs found. Please adjust filters and retry.')}
                 />
               ) : (
                 <Typography.Text type="secondary">
-                  请先设置筛选条件并点击“查询审计日志”。
+                  {tr('请先设置筛选条件并点击“查询审计日志”。', 'Please set filters and click "Query Audit Logs".')}
                 </Typography.Text>
               ),
             }}

@@ -6,13 +6,14 @@ import {
   FolderOpenOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
-import { Button, Layout, Menu, Segmented, Space, Tag, Typography } from 'antd'
+import { Button, Layout, Menu, Segmented, Select, Space, Tag, Typography } from 'antd'
 import type { ItemType } from 'antd/es/menu/interface'
 import { useEffect, useMemo, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { themePresets, type ThemeMode } from '../app/themes'
-import { useShellStore } from '../store/shell'
+import { useShellStore, type Locale } from '../store/shell'
 import { useAuthStore, type PlatformRole } from '../store/auth'
 
 const { Content, Header, Sider } = Layout
@@ -20,62 +21,65 @@ const { Content, Header, Sider } = Layout
 type ShellNavigationItem = {
   key: string
   icon: ReactNode
-  label: string
+  labelKey: string
   allowedRoles: PlatformRole[]
 }
 
-const roleLabels: Record<PlatformRole, string> = {
-  super_admin: '超级管理员',
-  platform_admin: '平台管理员',
-  standard_user: '标准用户',
+const roleLabelKeys: Record<PlatformRole, string> = {
+  super_admin: 'shell.role.super_admin',
+  platform_admin: 'shell.role.platform_admin',
+  standard_user: 'shell.role.standard_user',
 }
 
 const navigationItems: ShellNavigationItem[] = [
   {
     key: '/overview',
     icon: <DeploymentUnitOutlined />,
-    label: '总览',
+    labelKey: 'shell.nav.overview',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/projects',
     icon: <FolderOpenOutlined />,
-    label: '项目管理',
+    labelKey: 'shell.nav.projects',
     allowedRoles: ['super_admin', 'platform_admin'],
   },
   {
     key: '/users',
     icon: <TeamOutlined />,
-    label: '用户管理',
+    labelKey: 'shell.nav.users',
     allowedRoles: ['super_admin', 'platform_admin'],
   },
   {
     key: '/storage',
     icon: <DatabaseOutlined />,
-    label: '存储管理',
+    labelKey: 'shell.nav.storage',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/cdn',
     icon: <CloudServerOutlined />,
-    label: 'CDN管理',
+    labelKey: 'shell.nav.cdn',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
   {
     key: '/audits',
     icon: <FileSearchOutlined />,
-    label: '审计管理',
+    labelKey: 'shell.nav.audits',
     allowedRoles: ['super_admin', 'platform_admin', 'standard_user'],
   },
 ]
 
 export function AppShell() {
+  const { t, i18n } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const collapsed = useShellStore((state) => state.collapsed)
   const themeMode = useShellStore((state) => state.themeMode)
+  const language = useShellStore((state) => state.language)
   const setCollapsed = useShellStore((state) => state.setCollapsed)
   const setThemeMode = useShellStore((state) => state.setThemeMode)
+  const setLanguage = useShellStore((state) => state.setLanguage)
   const user = useAuthStore((state) => state.user)
   const clearSession = useAuthStore((state) => state.clearSession)
 
@@ -91,14 +95,14 @@ export function AppShell() {
       accessibleNavigationItems.map((item) => ({
         key: item.key,
         icon: item.icon,
-        label: item.label,
+        label: t(item.labelKey),
       })),
-    [accessibleNavigationItems],
+    [accessibleNavigationItems, t],
   )
   const selectedMenuKey =
     location.pathname === '/' ? '/overview' : `/${location.pathname.split('/')[1]}`
-  const currentSectionLabel =
-    accessibleNavigationItems.find((item) => item.key === selectedMenuKey)?.label ?? '控制台'
+  const currentSection = accessibleNavigationItems.find((item) => item.key === selectedMenuKey)
+  const currentSectionLabel = currentSection ? t(currentSection.labelKey) : t('shell.fallbackSection')
   const fallbackPath = accessibleNavigationItems[0]?.key
   const hasAccessToCurrentPath = accessibleNavigationItems.some(
     (item) => item.key === selectedMenuKey,
@@ -113,9 +117,21 @@ export function AppShell() {
     }
   }, [fallbackPath, hasAccessToCurrentPath, navigate])
 
+  useEffect(() => {
+    if (i18n.language === language) {
+      return
+    }
+    void i18n.changeLanguage(language)
+  }, [i18n, language])
+
   const handleLogout = () => {
     clearSession()
     navigate('/login', { replace: true })
+  }
+
+  const handleLanguageChange = (value: Locale) => {
+    setLanguage(value)
+    void i18n.changeLanguage(value)
   }
 
   return (
@@ -146,7 +162,7 @@ export function AppShell() {
       >
         <div style={{ padding: 20 }}>
           <Typography.Text className="app-shell-mark" style={{ display: 'block', fontSize: 12 }}>
-            COMMAND CENTER
+            {t('shell.commandCenter')}
           </Typography.Text>
           {!collapsed ? (
             <Typography.Title
@@ -156,7 +172,7 @@ export function AppShell() {
                 margin: '8px 0 0',
               }}
             >
-              CDN管理平台
+              {t('shell.brand')}
             </Typography.Title>
           ) : null}
         </div>
@@ -197,19 +213,29 @@ export function AppShell() {
               value={themeMode}
               options={
                 (Object.entries(themePresets) as [ThemeMode, (typeof themePresets)[ThemeMode]][]).map(
-                  ([value, preset]) => ({
-                    label: preset.label,
+                  ([value]) => ({
+                    label: t(`shell.theme.${value}`),
                     value,
                   }),
                 )
               }
               onChange={(value) => setThemeMode(value)}
             />
+            <Select<Locale>
+              className="app-shell-language-select"
+              value={language}
+              style={{ width: 108 }}
+              options={[
+                { label: t('shell.language.zhCN'), value: 'zh-CN' },
+                { label: t('shell.language.enUS'), value: 'en-US' },
+              ]}
+              onChange={(value) => handleLanguageChange(value)}
+            />
             <Space size="small">
               <Typography.Text style={{ color: 'var(--nt-text-primary)' }}>{userEmail}</Typography.Text>
-              <Tag className="nt-role-tag">{roleLabels[platformRole]}</Tag>
+              <Tag className="nt-role-tag">{t(roleLabelKeys[platformRole])}</Tag>
             </Space>
-            <Button onClick={handleLogout}>Sign Out</Button>
+            <Button onClick={handleLogout}>{t('shell.signOut')}</Button>
           </Space>
         </Header>
 

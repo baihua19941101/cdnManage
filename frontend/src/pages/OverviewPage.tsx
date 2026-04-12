@@ -12,6 +12,7 @@ import {
 import { Alert, Button, Card, Col, Row, Segmented, Space, Spin, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { resolveAPIErrorMessage } from '../services/api/error'
 import { apiClient } from '../services/api/client'
@@ -106,29 +107,29 @@ const FAILURE_RESULT = 'failure'
 
 const quickActionItems = [
   {
-    title: '上传文件',
-    description: '进入存储页面并发布资源对象。',
+    titleKey: 'overview.quickActions.uploadTitle',
+    descriptionKey: 'overview.quickActions.uploadDescription',
     to: '/storage',
     icon: <UploadOutlined />,
     requiresWriteAccess: true,
   },
   {
-    title: 'URL 刷新',
-    description: '进入 CDN 页面提交 URL 刷新。',
+    titleKey: 'overview.quickActions.urlRefreshTitle',
+    descriptionKey: 'overview.quickActions.urlRefreshDescription',
     to: '/cdn',
     icon: <CloudServerOutlined />,
     requiresWriteAccess: true,
   },
   {
-    title: '资源同步',
-    description: '进入 CDN 页面触发资源同步。',
+    titleKey: 'overview.quickActions.syncTitle',
+    descriptionKey: 'overview.quickActions.syncDescription',
     to: '/cdn',
     icon: <SyncOutlined />,
     requiresWriteAccess: true,
   },
   {
-    title: '审计查询',
-    description: '查看最近操作与失败记录。',
+    titleKey: 'overview.quickActions.auditsTitle',
+    descriptionKey: 'overview.quickActions.auditsDescription',
     to: '/audits',
     icon: <AuditOutlined />,
     requiresWriteAccess: false,
@@ -219,6 +220,7 @@ const aggregateMetrics = (logs: AuditLog[], visibleProjectTotal: number): Overvi
 }
 
 export function OverviewPage() {
+  const { t } = useTranslation()
   const [range, setRange] = useState<TimeRange>('24h')
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const isPlatformAdmin = isPlatformAdminRole(platformRole)
@@ -332,7 +334,7 @@ export function OverviewPage() {
         .filter((project) => Number.isFinite(project.id) && project.id > 0)
         .map((project) => ({
           id: project.id,
-          name: project.name?.trim() || `项目-${project.id}`,
+          name: project.name?.trim() || t('overview.activity.projectFallback', { projectId: project.id }),
         }))
 
       const visibleProjectTotal = normalizedProjectOptions.length
@@ -398,7 +400,9 @@ export function OverviewPage() {
             .filter((log) => log.action === UPLOAD_SESSION_ACTION && log.result === FAILURE_RESULT)
             .map((log) => ({
               projectID,
-              projectName: projectNameByID.get(projectID) ?? `项目-${projectID}`,
+              projectName:
+                projectNameByID.get(projectID) ??
+                t('overview.activity.projectFallback', { projectId: projectID }),
               log,
             })),
         )
@@ -414,7 +418,7 @@ export function OverviewPage() {
             ? item.log.targetIdentifier.trim()
             : item.log.requestId?.trim()
               ? `requestId: ${item.log.requestId.trim()}`
-              : '上传会话失败',
+              : t('overview.risks.uploadSessionFailed'),
           occurredAt: formatAuditTime(item.log.createdAt),
           auditLink: buildAuditLinkWithQuery(
             item.projectID,
@@ -430,7 +434,9 @@ export function OverviewPage() {
             .filter((log) => CDN_ACTIONS.has(log.action) && log.result === FAILURE_RESULT)
             .map((log) => ({
               projectID,
-              projectName: projectNameByID.get(projectID) ?? `项目-${projectID}`,
+              projectName:
+                projectNameByID.get(projectID) ??
+                t('overview.activity.projectFallback', { projectId: projectID }),
               log,
             })),
         )
@@ -466,8 +472,8 @@ export function OverviewPage() {
               ? log.actorUsername.trim()
               : Number.isFinite(log.actorUserId)
                 ? `user#${log.actorUserId}`
-                : '未知用户',
-            project: `${projectNameByID.get(projectID) ?? `项目-${projectID}`} (#${projectID})`,
+                : t('overview.activity.unknownUser'),
+            project: `${projectNameByID.get(projectID) ?? t('overview.activity.projectFallback', { projectId: projectID })} (#${projectID})`,
             action: log.action?.trim() || '-',
             result: log.result?.trim() || '-',
             time: formatAuditTime(log.createdAt),
@@ -561,7 +567,7 @@ export function OverviewPage() {
       setFailedUploadRiskItems([])
       setFailedCDNRiskItems([])
       setRecentActivityItems([])
-      setErrorText(resolveAPIErrorMessage(error, '总览核心卡片数据加载失败。'))
+      setErrorText(resolveAPIErrorMessage(error, t('overview.errors.coreLoadFailed')))
       if (!isPlatformAdmin) {
         setHasWritableProjectAccess(false)
       }
@@ -579,45 +585,45 @@ export function OverviewPage() {
   const headerSubtitle = useMemo(
     () =>
       range === '24h'
-        ? 'Current view: latest 24 hours'
-        : 'Current view: latest 7 days',
-    [range],
+        ? t('overview.subtitle24h')
+        : t('overview.subtitle7d'),
+    [range, t],
   )
 
   const coreMetricCards = useMemo(
     () => [
       {
         key: 'upload-total',
-        title: '上传会话总数',
+        title: t('overview.cards.uploadTotal'),
         value: metrics.uploadSessionTotal,
         icon: <UploadOutlined />,
       },
       {
         key: 'upload-failure',
-        title: '上传失败数',
+        title: t('overview.cards.uploadFailure'),
         value: metrics.uploadFailureTotal,
         icon: <FolderOpenOutlined />,
       },
       {
         key: 'cdn-total',
-        title: 'CDN 操作总数',
+        title: t('overview.cards.cdnTotal'),
         value: metrics.cdnOperationTotal,
         icon: <CloudServerOutlined />,
       },
       {
         key: 'cdn-failure',
-        title: 'CDN 失败数',
+        title: t('overview.cards.cdnFailure'),
         value: metrics.cdnFailureTotal,
         icon: <DeploymentUnitOutlined />,
       },
       {
         key: 'projects-visible',
-        title: '可见项目数',
+        title: t('overview.cards.visibleProjects'),
         value: metrics.visibleProjectTotal,
         icon: <AuditOutlined />,
       },
     ],
-    [metrics],
+    [metrics, t],
   )
   const visibleQuickActionItems = useMemo(
     () =>
@@ -630,78 +636,78 @@ export function OverviewPage() {
   const workbenchColumns = useMemo<ColumnsType<ProjectWorkbenchRow>>(
     () => [
       {
-        title: '项目 ID',
+        title: t('overview.cards.projectId'),
         dataIndex: 'projectId',
         width: 120,
       },
       {
-        title: '项目名称',
+        title: t('overview.cards.projectName'),
         dataIndex: 'projectName',
         width: 220,
       },
       {
-        title: '主存储桶',
+        title: t('overview.cards.primaryBucket'),
         dataIndex: 'primaryBucket',
         width: 220,
       },
       {
-        title: '主 CDN',
+        title: t('overview.cards.primaryCDN'),
         dataIndex: 'primaryCDN',
         width: 260,
       },
       {
-        title: '最近上传时间',
+        title: t('overview.cards.latestUploadAt'),
         dataIndex: 'latestUploadAt',
         width: 200,
       },
       {
-        title: '最近刷新时间',
+        title: t('overview.cards.latestRefreshAt'),
         dataIndex: 'latestRefreshAt',
         width: 200,
       },
       {
-        title: '失败计数',
+        title: t('overview.cards.failureCount'),
         dataIndex: 'failureCount',
         width: 120,
       },
       {
-        title: '快捷入口',
+        title: t('overview.cards.shortcuts'),
         key: 'quick-links',
         width: 180,
         render: (_, record) => (
           <Space size={4}>
             <Button type="link" size="small" style={{ padding: 0 }}>
-              <Link to={`/storage?projectId=${record.projectId}`}>存储</Link>
+              <Link to={`/storage?projectId=${record.projectId}`}>{t('overview.cards.shortcutStorage')}</Link>
             </Button>
             <Button type="link" size="small" style={{ padding: 0 }}>
-              <Link to={`/cdn?projectId=${record.projectId}`}>CDN</Link>
+              <Link to={`/cdn?projectId=${record.projectId}`}>{t('overview.cards.shortcutCDN')}</Link>
             </Button>
           </Space>
         ),
       },
     ],
-    [],
+    [t],
   )
 
   const activityColumns = useMemo<ColumnsType<RecentActivityItem>>(
     () => [
       {
-        title: '操作人',
+        title: t('overview.cards.actor'),
         dataIndex: 'actor',
         width: 180,
       },
       {
-        title: '项目',
+        title: t('overview.cards.project'),
         dataIndex: 'project',
         width: 260,
       },
       {
-        title: '动作',
+        title: t('overview.cards.action'),
         dataIndex: 'action',
         width: 220,
       },
       {
-        title: '结果',
+        title: t('overview.cards.result'),
         dataIndex: 'result',
         width: 120,
         render: (value: string) =>
@@ -716,12 +722,12 @@ export function OverviewPage() {
           ),
       },
       {
-        title: '时间',
+        title: t('overview.cards.time'),
         dataIndex: 'time',
         width: 190,
       },
       {
-        title: '请求 ID',
+        title: t('overview.cards.requestId'),
         dataIndex: 'requestId',
         width: 280,
         render: (value: string, record) =>
@@ -734,19 +740,19 @@ export function OverviewPage() {
                 copyable={{
                   text: value,
                   icon: [<CopyOutlined key="copy-icon" />, <CopyOutlined key="copied-icon" />],
-                  tooltips: ['复制 requestId', '已复制'],
+                  tooltips: [t('overview.cards.copyRequestId'), t('overview.cards.copied')],
                 }}
               >
                 {value}
               </Typography.Text>
               <Button type="link" size="small" style={{ padding: 0 }}>
-                <Link to={record.traceLink}>追踪</Link>
+                <Link to={record.traceLink}>{t('overview.cards.trace')}</Link>
               </Button>
             </Space>
           ),
       },
     ],
-    [],
+    [t],
   )
 
   return (
@@ -769,7 +775,7 @@ export function OverviewPage() {
                 color: 'var(--nt-text-primary)',
               }}
             >
-              欢迎使用 CDN 管理平台
+              {t('overview.heading')}
             </Typography.Title>
             <Typography.Paragraph style={{ marginBottom: 0, color: 'var(--nt-text-secondary)' }}>
               {headerSubtitle}
@@ -786,17 +792,19 @@ export function OverviewPage() {
               onChange={(value) => setRange(value)}
             />
             <Button icon={<ReloadOutlined />} onClick={() => void loadCoreMetrics()} loading={loading}>
-              刷新
+              {t('overview.refresh')}
             </Button>
           </Space>
         </Space>
       </Card>
 
       <Card
-        title="核心指标"
+        title={t('overview.cards.title')}
         extra={
           <Typography.Text type="secondary">
-            {lastUpdatedAt ? `更新时间：${new Date(lastUpdatedAt).toLocaleString()}` : '等待数据中'}
+            {lastUpdatedAt
+              ? t('overview.cards.updatedAt', { time: new Date(lastUpdatedAt).toLocaleString() })
+              : t('overview.cards.waiting')}
           </Typography.Text>
         }
       >
@@ -821,18 +829,18 @@ export function OverviewPage() {
         </Space>
       </Card>
 
-      <Card title="快捷操作">
+      <Card title={t('overview.quickActions.title')}>
         <Row gutter={[16, 16]}>
           {visibleQuickActionItems.map((item) => (
-            <Col key={item.title} xs={24} md={12} lg={6}>
+            <Col key={item.titleKey} xs={24} md={12} lg={6}>
               <Card size="small" style={{ height: '100%' }}>
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Typography.Text strong>
-                    {item.icon} {item.title}
+                    {item.icon} {t(item.titleKey)}
                   </Typography.Text>
-                  <Typography.Text type="secondary">{item.description}</Typography.Text>
+                  <Typography.Text type="secondary">{t(item.descriptionKey)}</Typography.Text>
                   <Button type="link" style={{ padding: 0 }}>
-                    <Link to={item.to}>打开</Link>
+                    <Link to={item.to}>{t('overview.quickActions.open')}</Link>
                   </Button>
                 </Space>
               </Card>
@@ -841,7 +849,7 @@ export function OverviewPage() {
         </Row>
       </Card>
 
-      <Card title="项目工作台列表">
+      <Card title={t('overview.workbench.title')}>
         <Table<ProjectWorkbenchRow>
           rowKey="projectId"
           size="small"
@@ -853,11 +861,11 @@ export function OverviewPage() {
         />
       </Card>
 
-      <Card title="运维风险摘要">
+      <Card title={t('overview.risks.title')}>
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={12}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Typography.Text strong>最近失败上传会话</Typography.Text>
+              <Typography.Text strong>{t('overview.risks.recentUploadFailures')}</Typography.Text>
               {failedUploadRiskItems.length > 0 ? (
                 failedUploadRiskItems.map((item) => (
                   <Card key={item.key} size="small">
@@ -866,19 +874,19 @@ export function OverviewPage() {
                       <Typography.Text type="secondary">{item.occurredAt}</Typography.Text>
                       <Typography.Text>{item.summary}</Typography.Text>
                       <Button type="link" style={{ padding: 0, width: 'fit-content' }}>
-                        <Link to={item.auditLink}>查看审计筛选结果</Link>
+                        <Link to={item.auditLink}>{t('overview.risks.viewAudit')}</Link>
                       </Button>
                     </Space>
                   </Card>
                 ))
               ) : (
-                <Typography.Text type="secondary">当前时间范围内无失败上传会话。</Typography.Text>
+                <Typography.Text type="secondary">{t('overview.risks.noUploadFailures')}</Typography.Text>
               )}
             </Space>
           </Col>
           <Col xs={24} lg={12}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Typography.Text strong>最近失败 CDN 操作</Typography.Text>
+              <Typography.Text strong>{t('overview.risks.recentCDNFailures')}</Typography.Text>
               {failedCDNRiskItems.length > 0 ? (
                 failedCDNRiskItems.map((item) => (
                   <Card key={item.key} size="small">
@@ -887,20 +895,20 @@ export function OverviewPage() {
                       <Typography.Text type="secondary">{item.occurredAt}</Typography.Text>
                       <Typography.Text>{item.summary}</Typography.Text>
                       <Button type="link" style={{ padding: 0, width: 'fit-content' }}>
-                        <Link to={item.auditLink}>查看审计筛选结果</Link>
+                        <Link to={item.auditLink}>{t('overview.risks.viewAudit')}</Link>
                       </Button>
                     </Space>
                   </Card>
                 ))
               ) : (
-                <Typography.Text type="secondary">当前时间范围内无失败 CDN 操作。</Typography.Text>
+                <Typography.Text type="secondary">{t('overview.risks.noCDNFailures')}</Typography.Text>
               )}
             </Space>
           </Col>
         </Row>
       </Card>
 
-      <Card title="最近活动时间线">
+      <Card title={t('overview.activity.title')}>
         <Table<RecentActivityItem>
           rowKey="key"
           size="small"
@@ -908,7 +916,7 @@ export function OverviewPage() {
           columns={activityColumns}
           dataSource={recentActivityItems}
           pagination={{ pageSize: 10, showSizeChanger: false }}
-          locale={{ emptyText: '当前时间范围内暂无可见活动。' }}
+          locale={{ emptyText: t('overview.activity.empty') }}
           scroll={{ x: 1300 }}
         />
       </Card>

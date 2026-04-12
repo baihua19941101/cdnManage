@@ -26,6 +26,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import axios from 'axios'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { apiClient } from '../services/api/client'
 import { hasDuplicateProjectBindings } from './managementValidation'
@@ -154,6 +155,8 @@ const normalizeBindings = (bindings: unknown): ProjectBinding[] => {
 }
 
 export function UsersPage() {
+  const { t, i18n } = useTranslation()
+  const tr = (zh: string, en: string) => (i18n.language === 'en-US' ? en : zh)
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const canWrite = isPlatformAdminRole(platformRole)
   const [messageApi, messageContext] = message.useMessage()
@@ -183,7 +186,7 @@ export function UsersPage() {
       const response = await apiClient.get<ApiResponse<User[]>>('/users')
       setUsers(Array.isArray(response.data.data) ? response.data.data : [])
     } catch (e) {
-      setError(resolveErrorMessage(e, '用户列表加载失败，请稍后重试。'))
+      setError(resolveErrorMessage(e, tr('用户列表加载失败，请稍后重试。', 'Failed to load user list.')))
     } finally {
       setLoading(false)
     }
@@ -219,11 +222,11 @@ export function UsersPage() {
     setSubmitting(true)
     try {
       await apiClient.post('/users', values)
-      messageApi.success('用户创建成功。')
+      messageApi.success(tr('用户创建成功。', 'User created.'))
       setCreateVisible(false)
       await fetchUsers()
     } catch (e) {
-      messageApi.error(resolveErrorMessage(e, '用户创建失败。'))
+      messageApi.error(resolveErrorMessage(e, tr('用户创建失败。', 'Failed to create user.')))
     } finally {
       setSubmitting(false)
     }
@@ -248,11 +251,11 @@ export function UsersPage() {
     setSubmitting(true)
     try {
       await apiClient.put(`/users/${activeUser.id}`, values)
-      messageApi.success('用户信息已更新。')
+      messageApi.success(tr('用户信息已更新。', 'User updated.'))
       setEditVisible(false)
       await fetchUsers()
     } catch (e) {
-      messageApi.error(resolveErrorMessage(e, '用户更新失败。'))
+      messageApi.error(resolveErrorMessage(e, tr('用户更新失败。', 'Failed to update user.')))
     } finally {
       setSubmitting(false)
     }
@@ -270,10 +273,10 @@ export function UsersPage() {
         status: 'disabled',
         platformRole: user.platformRole,
       })
-      messageApi.success('用户已禁用。')
+      messageApi.success(tr('用户已禁用。', 'User disabled.'))
       await fetchUsers()
     } catch (e) {
-      messageApi.error(resolveErrorMessage(e, '禁用用户失败。'))
+      messageApi.error(resolveErrorMessage(e, tr('禁用用户失败。', 'Failed to disable user.')))
     } finally {
       setSubmitting(false)
     }
@@ -308,7 +311,7 @@ export function UsersPage() {
       return snapshotBindings
     } catch (e) {
       if (bindingSnapshotTargetRef.current === user.id) {
-        messageApi.error(resolveErrorMessage(e, '用户项目绑定快照加载失败。'))
+        messageApi.error(resolveErrorMessage(e, tr('用户项目绑定快照加载失败。', 'Failed to load user project-binding snapshot.')))
       }
       return normalizeBindings(user.projectRoles)
     } finally {
@@ -335,11 +338,11 @@ export function UsersPage() {
       await apiClient.put(`/users/${activeUser.id}/password`, {
         newPassword: values.newPassword,
       })
-      messageApi.success('密码重置成功。')
+      messageApi.success(tr('密码重置成功。', 'Password reset successfully.'))
       setResetPasswordVisible(false)
       resetPasswordForm.resetFields()
     } catch (e) {
-      messageApi.error(resolveErrorMessage(e, '重置密码失败。'))
+      messageApi.error(resolveErrorMessage(e, tr('重置密码失败。', 'Failed to reset password.')))
     } finally {
       setSubmitting(false)
     }
@@ -353,7 +356,7 @@ export function UsersPage() {
     const bindings = values.bindings ?? []
 
     if (hasDuplicateProjectBindings(bindings)) {
-      messageApi.error('同一个项目不能重复绑定。')
+      messageApi.error(tr('同一个项目不能重复绑定。', 'Duplicate project binding is not allowed.'))
       return
     }
 
@@ -374,10 +377,10 @@ export function UsersPage() {
           item.id === activeUser.id ? { ...item, projectRoles: latestBindings } : item,
         ),
       )
-      messageApi.success('项目角色绑定已更新。')
+      messageApi.success(tr('项目角色绑定已更新。', 'Project role bindings updated.'))
       setBindingVisible(false)
     } catch (e) {
-      messageApi.error(resolveErrorMessage(e, '项目角色绑定更新失败。'))
+      messageApi.error(resolveErrorMessage(e, tr('项目角色绑定更新失败。', 'Failed to update project role bindings.')))
     } finally {
       setSubmitting(false)
     }
@@ -385,42 +388,42 @@ export function UsersPage() {
 
   const columns: ColumnsType<User> = [
     { title: 'ID', dataIndex: 'id', width: 90 },
-    { title: '用户名', dataIndex: 'username', width: 180 },
-    { title: '邮箱', dataIndex: 'email' },
+    { title: t('pages.users.table.username'), dataIndex: 'username', width: 180 },
+    { title: t('pages.users.table.email'), dataIndex: 'email' },
     {
-      title: '状态',
+      title: t('pages.users.table.status'),
       dataIndex: 'status',
       width: 120,
       render: (value: UserStatus) =>
         value === 'active' ? <Tag color="green">active</Tag> : <Tag color="red">disabled</Tag>,
     },
     {
-      title: '平台角色',
+      title: t('pages.users.table.role'),
       dataIndex: 'platformRole',
       width: 160,
       render: (value: PlatformRole) => <Tag color={roleTagColor[value]}>{value}</Tag>,
     },
     {
-      title: '操作',
+      title: t('pages.users.table.actions'),
       key: 'actions',
       width: 320,
       render: (_, record) => (
         <Space>
           <Button icon={<EditOutlined />} onClick={() => openEdit(record)} disabled={!canWrite}>
-            编辑
+            {tr('编辑', 'Edit')}
           </Button>
           <Button
             icon={<KeyOutlined />}
             onClick={() => openResetPassword(record)}
             disabled={!canWrite}
           >
-            重置密码
+            {t('pages.users.resetPassword')}
           </Button>
           <Button icon={<TeamOutlined />} onClick={() => openBindings(record)} disabled={!canWrite}>
-            项目角色绑定
+            {t('pages.users.bindRoles')}
           </Button>
           <Popconfirm
-            title="确认禁用该用户？"
+            title={tr('确认禁用该用户？', 'Disable this user?')}
             onConfirm={() => void disableUser(record)}
             okButtonProps={{ loading: submitting }}
             disabled={!canWrite || record.status === 'disabled'}
@@ -430,7 +433,7 @@ export function UsersPage() {
               icon={<StopOutlined />}
               disabled={!canWrite || record.status === 'disabled'}
             >
-              禁用
+              {tr('禁用', 'Disable')}
             </Button>
           </Popconfirm>
         </Space>
@@ -442,11 +445,11 @@ export function UsersPage() {
     <>
       {messageContext}
       <Card
-        title="Users"
+        title={t('pages.users.title')}
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => void fetchUsers()}>
-              刷新
+              {t('pages.users.refresh')}
             </Button>
             <Button
               type="primary"
@@ -454,7 +457,7 @@ export function UsersPage() {
               onClick={openCreate}
               disabled={!canWrite}
             >
-              新建用户
+              {t('pages.users.create')}
             </Button>
           </Space>
         }
@@ -464,7 +467,7 @@ export function UsersPage() {
             type="warning"
             showIcon
             style={{ marginBottom: 12 }}
-            message="当前账号为只读权限，用户写操作入口已禁用。"
+            message={t('pages.users.readOnlyHint')}
           />
         ) : null}
         {error ? (
@@ -475,7 +478,7 @@ export function UsersPage() {
       </Card>
 
       <Modal
-        title="新建用户"
+        title={tr('新建用户', 'Create User')}
         open={createVisible}
         onCancel={() => setCreateVisible(false)}
         onOk={() => void submitCreate()}
@@ -483,40 +486,40 @@ export function UsersPage() {
         destroyOnHidden
       >
         <Form<CreateUserFormValues> form={createForm} layout="vertical">
-          <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
+          <Form.Item name="username" label={tr('用户名', 'Username')} rules={[{ required: true, message: tr('请输入用户名', 'Please input username') }]}>
             <Input />
           </Form.Item>
           <Form.Item
             name="email"
-            label="邮箱"
+            label={tr('邮箱', 'Email')}
             rules={[
-              { required: true, message: '请输入邮箱' },
-              { type: 'email', message: '邮箱格式不正确' },
+              { required: true, message: tr('请输入邮箱', 'Please input email') },
+              { type: 'email', message: tr('邮箱格式不正确', 'Invalid email format') },
             ]}
           >
             <Input />
           </Form.Item>
           <Form.Item
             name="password"
-            label="初始密码"
+            label={tr('初始密码', 'Initial Password')}
             rules={[
-              { required: true, message: '请输入初始密码' },
-              { min: 8, message: '密码长度至少 8 位' },
+              { required: true, message: tr('请输入初始密码', 'Please input initial password') },
+              { min: 8, message: tr('密码长度至少 8 位', 'Password must be at least 8 characters') },
             ]}
           >
             <Input.Password />
           </Form.Item>
-          <Form.Item name="status" label="状态" rules={[{ required: true }]}>
+          <Form.Item name="status" label={tr('状态', 'Status')} rules={[{ required: true }]}>
             <Select options={statusOptions} />
           </Form.Item>
-          <Form.Item name="platformRole" label="平台角色" rules={[{ required: true }]}>
+          <Form.Item name="platformRole" label={tr('平台角色', 'Platform Role')} rules={[{ required: true }]}>
             <Select options={platformRoleOptions} />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={`编辑用户${activeUser ? ` - ${activeUser.username}` : ''}`}
+        title={`${tr('编辑用户', 'Edit User')}${activeUser ? ` - ${activeUser.username}` : ''}`}
         open={editVisible}
         onCancel={() => setEditVisible(false)}
         onOk={() => void submitEdit()}
@@ -524,30 +527,30 @@ export function UsersPage() {
         destroyOnHidden
       >
         <Form<EditUserFormValues> form={editForm} layout="vertical">
-          <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
+          <Form.Item name="username" label={tr('用户名', 'Username')} rules={[{ required: true, message: tr('请输入用户名', 'Please input username') }]}>
             <Input />
           </Form.Item>
           <Form.Item
             name="email"
-            label="邮箱"
+            label={tr('邮箱', 'Email')}
             rules={[
-              { required: true, message: '请输入邮箱' },
-              { type: 'email', message: '邮箱格式不正确' },
+              { required: true, message: tr('请输入邮箱', 'Please input email') },
+              { type: 'email', message: tr('邮箱格式不正确', 'Invalid email format') },
             ]}
           >
             <Input />
           </Form.Item>
-          <Form.Item name="status" label="状态" rules={[{ required: true }]}>
+          <Form.Item name="status" label={tr('状态', 'Status')} rules={[{ required: true }]}>
             <Select options={statusOptions} />
           </Form.Item>
-          <Form.Item name="platformRole" label="平台角色" rules={[{ required: true }]}>
+          <Form.Item name="platformRole" label={tr('平台角色', 'Platform Role')} rules={[{ required: true }]}>
             <Select options={platformRoleOptions} />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={`项目角色绑定${activeUser ? ` - ${activeUser.username}` : ''}`}
+        title={`${tr('项目角色绑定', 'Project Role Bindings')}${activeUser ? ` - ${activeUser.username}` : ''}`}
         open={bindingVisible}
         onCancel={() => {
           bindingSnapshotTargetRef.current = null
@@ -558,7 +561,7 @@ export function UsersPage() {
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
-          每次提交会替换该用户当前全部项目绑定关系。
+          {tr('每次提交会替换该用户当前全部项目绑定关系。', 'Each submission replaces all current project bindings for this user.')}
         </Typography.Paragraph>
         <Spin spinning={bindingSnapshotLoading}>
           <Form<BindingFormValues> form={bindingForm} layout="vertical">
@@ -574,9 +577,9 @@ export function UsersPage() {
                     padding: '0 4px',
                   }}
                 >
-                  <Typography.Text type="secondary">项目</Typography.Text>
-                  <Typography.Text type="secondary">项目角色</Typography.Text>
-                  <Typography.Text type="secondary">操作</Typography.Text>
+                  <Typography.Text type="secondary">{tr('项目', 'Project')}</Typography.Text>
+                  <Typography.Text type="secondary">{tr('项目角色', 'Project Role')}</Typography.Text>
+                  <Typography.Text type="secondary">{tr('操作', 'Action')}</Typography.Text>
                 </div>
                 {fields.map((field) => (
                   <div
@@ -591,7 +594,7 @@ export function UsersPage() {
                     <Form.Item
                       name={[field.name, 'projectId']}
                       style={{ marginBottom: 0 }}
-                      rules={[{ required: true, message: '请选择项目' }]}
+                      rules={[{ required: true, message: tr('请选择项目', 'Please select project') }]}
                     >
                       <Select
                         showSearch
@@ -605,7 +608,7 @@ export function UsersPage() {
                     <Form.Item
                       name={[field.name, 'projectRole']}
                       style={{ marginBottom: 0 }}
-                      rules={[{ required: true, message: '请选择项目角色' }]}
+                      rules={[{ required: true, message: tr('请选择项目角色', 'Please select project role') }]}
                     >
                       <Select options={projectRoleOptions} />
                     </Form.Item>
@@ -623,7 +626,7 @@ export function UsersPage() {
                   onClick={() => add({ projectRole: 'project_read_only' })}
                   disabled={!canWrite}
                 >
-                  添加项目角色绑定
+                  {tr('添加项目角色绑定', 'Add Project Role Binding')}
                 </Button>
               </Space>
             )}
@@ -633,7 +636,7 @@ export function UsersPage() {
       </Modal>
 
       <Modal
-        title={`重置密码${activeUser ? ` - ${activeUser.username}` : ''}`}
+        title={`${tr('重置密码', 'Reset Password')}${activeUser ? ` - ${activeUser.username}` : ''}`}
         open={resetPasswordVisible}
         onCancel={() => setResetPasswordVisible(false)}
         onOk={() => void submitResetPassword()}
@@ -641,31 +644,31 @@ export function UsersPage() {
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
-          新密码长度至少 8 位。
+          {tr('新密码长度至少 8 位。', 'New password must be at least 8 characters.')}
         </Typography.Paragraph>
         <Form<ResetPasswordFormValues> form={resetPasswordForm} layout="vertical">
           <Form.Item
             name="newPassword"
-            label="新密码"
+            label={tr('新密码', 'New Password')}
             rules={[
-              { required: true, message: '请输入新密码' },
-              { min: 8, message: '密码长度至少 8 位' },
+              { required: true, message: tr('请输入新密码', 'Please input new password') },
+              { min: 8, message: tr('密码长度至少 8 位', 'Password must be at least 8 characters') },
             ]}
           >
             <Input.Password />
           </Form.Item>
           <Form.Item
             name="confirmPassword"
-            label="确认新密码"
+            label={tr('确认新密码', 'Confirm Password')}
             dependencies={['newPassword']}
             rules={[
-              { required: true, message: '请再次输入新密码' },
+              { required: true, message: tr('请再次输入新密码', 'Please re-enter new password') },
               ({ getFieldValue }) => ({
                 validator(_, value) {
                   if (!value || getFieldValue('newPassword') === value) {
                     return Promise.resolve()
                   }
-                  return Promise.reject(new Error('两次输入的密码不一致'))
+                  return Promise.reject(new Error(tr('两次输入的密码不一致', 'Passwords do not match')))
                 },
               }),
             ]}

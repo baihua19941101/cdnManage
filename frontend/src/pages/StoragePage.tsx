@@ -30,8 +30,10 @@ import type { TableRowSelection } from 'antd/es/table/interface'
 import type { UploadFile } from 'antd/es/upload/interface'
 import axios from 'axios'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 
+import i18n from '../i18n'
 import { apiClient } from '../services/api/client'
 import { resolveAPIErrorMessage } from '../services/api/error'
 import {
@@ -169,6 +171,7 @@ const UPLOAD_STAGE_B_POLL_TIMEOUT_MS = 2 * 60 * 1000
 const OBJECT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 const MIN_OBJECT_FETCH_LIMIT = 200
 const OBJECT_FETCH_LIMIT_MULTIPLIER = 10
+const trGlobal = (zh: string, en: string) => (i18n.language === 'en-US' ? en : zh)
 
 const normalizeDirectoryPrefix = (value: string): string => {
   const trimmed = value.trim().replace(/^\/+/, '')
@@ -611,7 +614,10 @@ const parseArchiveSummary = (data: unknown): ArchiveSummary | null => {
 }
 
 const formatArchiveSummary = (summary: ArchiveSummary): string =>
-  `解压与上传摘要：压缩包 ${summary.archivesProcessed}，解压 ${summary.extracted}，上传 ${summary.uploaded}，跳过 ${summary.skipped}，失败 ${summary.failed}`
+  trGlobal(
+    `解压与上传摘要：压缩包 ${summary.archivesProcessed}，解压 ${summary.extracted}，上传 ${summary.uploaded}，跳过 ${summary.skipped}，失败 ${summary.failed}`,
+    `Extract and upload summary: archives ${summary.archivesProcessed}, extracted ${summary.extracted}, uploaded ${summary.uploaded}, skipped ${summary.skipped}, failed ${summary.failed}`,
+  )
 
 const parseUploadSessionId = (data: unknown): string => {
   if (!isRecord(data)) {
@@ -715,6 +721,8 @@ const fetchUploadPolicyLimitBytes = async (): Promise<number> => {
 }
 
 export function StoragePage() {
+  const { t, i18n } = useTranslation()
+  const tr = (zh: string, en: string) => (i18n.language === 'en-US' ? en : zh)
   const [searchParams] = useSearchParams()
   const [messageApi, messageContext] = message.useMessage()
   const [queryForm] = Form.useForm<QueryFormValues>()
@@ -830,14 +838,14 @@ export function StoragePage() {
 
   const notifyDeleteRequestError = (error: unknown, scopeLabel: string) => {
     if (isCanceledError(error)) {
-      messageApi.warning(`${scopeLabel}已取消。`)
+      messageApi.warning(tr(`${scopeLabel}已取消。`, `${scopeLabel} canceled.`))
       return
     }
     if (isTimeoutError(error)) {
-      messageApi.error(`${scopeLabel}请求超时，请重试或缩小删除范围。`)
+      messageApi.error(tr(`${scopeLabel}请求超时，请重试或缩小删除范围。`, `${scopeLabel} timed out. Please retry or reduce delete scope.`))
       return
     }
-    messageApi.error(resolveAPIErrorMessage(error, `${scopeLabel}失败（后端失败）。`))
+    messageApi.error(resolveAPIErrorMessage(error, tr(`${scopeLabel}失败（后端失败）。`, `${scopeLabel} failed (backend failure).`)))
   }
 
   const getQuery = () => {
@@ -857,7 +865,7 @@ export function StoragePage() {
     const values = await queryForm.validateFields()
     const projectID = Number(values.projectId)
     if (!Number.isFinite(projectID) || projectID <= 0) {
-      messageApi.error('Project ID 必须是正整数。')
+      messageApi.error(tr('Project ID 必须是正整数。', 'Project ID must be a positive integer.'))
       return
     }
     const requestPrefix =
@@ -881,7 +889,7 @@ export function StoragePage() {
       setCurrentPrefix(requestPrefix)
       setObjectCurrentPage(1)
     } catch (error) {
-      setQueryError(resolveAPIErrorMessage(error, '对象列表加载失败。'))
+      setQueryError(resolveAPIErrorMessage(error, tr('对象列表加载失败。', 'Failed to load object list.')))
       setObjects([])
     } finally {
       setLoading(false)
@@ -896,7 +904,7 @@ export function StoragePage() {
       setProjectOptions(items)
       return items
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '项目列表加载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('项目列表加载失败。', 'Failed to load project list.')))
       setProjectOptions([])
       return [] as ProjectOption[]
     } finally {
@@ -932,7 +940,7 @@ export function StoragePage() {
       queryForm.setFieldValue('prefix', '')
       setCurrentPrefix('')
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '项目存储桶加载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('项目存储桶加载失败。', 'Failed to load project buckets.')))
       setCurrentProjectRole('')
       setBucketOptions([])
       queryForm.setFieldValue('bucketName', '')
@@ -1006,7 +1014,7 @@ export function StoragePage() {
 
     const { projectID, bucketName } = getQuery()
     if (!projectID || !bucketName) {
-      messageApi.error('请先填写并查询 Project ID 与 BucketName。')
+      messageApi.error(tr('请先填写并查询 Project ID 与 BucketName。', 'Please set and query Project ID and BucketName first.'))
       return
     }
 
@@ -1014,7 +1022,7 @@ export function StoragePage() {
       item.originFileObj ? [item.originFileObj] : [],
     )
     if (files.length === 0) {
-      messageApi.error('请选择待上传文件。')
+      messageApi.error(tr('请选择待上传文件。', 'Please select files to upload.'))
       return
     }
 
@@ -1022,7 +1030,7 @@ export function StoragePage() {
     if (oversizedFiles.length > 0) {
       const limitText = formatUploadLimitText(currentLimitBytes)
       oversizedFiles.forEach((file) => {
-        messageApi.error(`文件 ${file.name} 超过当前大小限制（${limitText}），已拒绝上传。`)
+        messageApi.error(tr(`文件 ${file.name} 超过当前大小限制（${limitText}），已拒绝上传。`, `File ${file.name} exceeds size limit (${limitText}) and was rejected.`))
       })
       setPendingUploadFiles((prev) =>
         prev.filter((item) => {
@@ -1034,7 +1042,7 @@ export function StoragePage() {
 
     const uploadableFiles = files.filter((file) => file.size <= currentLimitBytes)
     if (uploadableFiles.length === 0) {
-      messageApi.error('当前待上传文件均超过大小限制，请重新选择。')
+      messageApi.error(tr('当前待上传文件均超过大小限制，请重新选择。', 'All selected files exceed size limit. Please select again.'))
       return
     }
 
@@ -1045,7 +1053,7 @@ export function StoragePage() {
     if (uploadableFiles.length === 1) {
       const singleFile = uploadableFiles[0]
       if (!singleFile) {
-        messageApi.error('请选择待上传文件。')
+        messageApi.error(tr('请选择待上传文件。', 'Please select files to upload.'))
         return
       }
       if (trimmedKey) {
@@ -1117,19 +1125,19 @@ export function StoragePage() {
       }
 
       const mergedFailureReasonText = mergedFailureSummary
-        ? ` 失败原因摘要：${mergedFailureSummary}。`
+        ? tr(` 失败原因摘要：${mergedFailureSummary}。`, ` Failure summary: ${mergedFailureSummary}.`)
         : ''
       if (finalFailureCount > 0) {
-        messageApi.warning(`上传完成：成功 ${finalSuccessCount}，失败 ${finalFailureCount}${archiveSummaryText}。${mergedFailureReasonText}`)
+        messageApi.warning(tr(`上传完成：成功 ${finalSuccessCount}，失败 ${finalFailureCount}${archiveSummaryText}。${mergedFailureReasonText}`, `Upload finished: success ${finalSuccessCount}, failure ${finalFailureCount}${archiveSummaryText}.${mergedFailureReasonText}`))
       } else {
-        messageApi.success(`上传完成：成功 ${finalSuccessCount}，失败 0${archiveSummaryText}。`)
+        messageApi.success(tr(`上传完成：成功 ${finalSuccessCount}，失败 0${archiveSummaryText}。`, `Upload finished: success ${finalSuccessCount}, failure 0${archiveSummaryText}.`))
       }
 
       if (archiveSummary && finalSuccessCount > 0) {
         const currentPrefix = queryForm.getFieldValue('prefix')
         if (typeof currentPrefix === 'string' && currentPrefix.trim()) {
           queryForm.setFieldValue('prefix', '')
-          messageApi.info('已清空前缀以展示最新上传对象')
+          messageApi.info(tr('已清空前缀以展示最新上传对象', 'Prefix cleared to show latest uploaded objects.'))
         }
       }
 
@@ -1139,17 +1147,17 @@ export function StoragePage() {
       await loadUploadSessionSummaries(projectID)
     } catch (error) {
       if (axios.isAxiosError(error) && error.code === 'ERR_CANCELED') {
-        messageApi.warning('上传已取消。')
+        messageApi.warning(tr('上传已取消。', 'Upload canceled.'))
         return
       }
       if (axios.isAxiosError(error) && error.code === 'ECONNABORTED') {
-        messageApi.error(resolveAPIErrorMessage(error, '上传阶段 A 超时，请重试。'))
+        messageApi.error(resolveAPIErrorMessage(error, tr('上传阶段 A 超时，请重试。', 'Upload stage A timed out, please retry.')))
         return
       }
       const failureReasonSummary = parseFailureReasonSummaryFromError(error)
-      const baseErrorMessage = resolveAPIErrorMessage(error, '上传失败。')
+      const baseErrorMessage = resolveAPIErrorMessage(error, tr('上传失败。', 'Upload failed.'))
       if (failureReasonSummary) {
-        messageApi.error(`${baseErrorMessage} 失败原因摘要：${failureReasonSummary}。`)
+        messageApi.error(tr(`${baseErrorMessage} 失败原因摘要：${failureReasonSummary}。`, `${baseErrorMessage} Failure summary: ${failureReasonSummary}.`))
       } else {
         messageApi.error(baseErrorMessage)
       }
@@ -1168,7 +1176,7 @@ export function StoragePage() {
   const downloadObject = async (key: string) => {
     const { projectID, bucketName } = getQuery()
     if (!projectID || !bucketName) {
-      messageApi.error('请先填写并查询 Project ID 与 BucketName。')
+      messageApi.error(tr('请先填写并查询 Project ID 与 BucketName。', 'Please set and query Project ID and BucketName first.'))
       return
     }
 
@@ -1186,7 +1194,7 @@ export function StoragePage() {
       anchor.remove()
       window.URL.revokeObjectURL(url)
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '下载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('下载失败。', 'Download failed.')))
     }
   }
 
@@ -1196,11 +1204,11 @@ export function StoragePage() {
     }
     const { projectID, bucketName } = getQuery()
     if (!projectID || !bucketName) {
-      messageApi.error('请先填写并查询 Project ID 与 BucketName。')
+      messageApi.error(tr('请先填写并查询 Project ID 与 BucketName。', 'Please set and query Project ID and BucketName first.'))
       return
     }
 
-    const scopeLabel = isDir ? '目录删除' : '对象删除'
+    const scopeLabel = isDir ? tr('目录删除', 'Directory Delete') : tr('对象删除', 'Object Delete')
     const abortController = startDeleteRequest(scopeLabel)
     setSubmitting(true)
     try {
@@ -1216,13 +1224,13 @@ export function StoragePage() {
       if (isDir) {
         if (failedObjects > 0) {
           messageApi.warning(
-            `目录删除完成：成功删除 ${deletedObjects}，失败 ${failedObjects}${summary?.reason ? `。${summary.reason}` : ''}`,
+            tr(`目录删除完成：成功删除 ${deletedObjects}，失败 ${failedObjects}${summary?.reason ? `。${summary.reason}` : ''}`, `Directory delete completed: deleted ${deletedObjects}, failed ${failedObjects}${summary?.reason ? `. ${summary.reason}` : ''}`),
           )
         } else {
-          messageApi.success(`目录删除完成：成功删除 ${deletedObjects} 个对象。`)
+          messageApi.success(tr(`目录删除完成：成功删除 ${deletedObjects} 个对象。`, `Directory delete completed: deleted ${deletedObjects} objects.`))
         }
       } else {
-        messageApi.success('删除成功。')
+        messageApi.success(tr('删除成功。', 'Delete succeeded.'))
       }
 
       if (isDir && normalizeDirectoryPrefix(key) === normalizeDirectoryPrefix(currentPrefix)) {
@@ -1245,7 +1253,7 @@ export function StoragePage() {
 
     const { projectID, bucketName } = getQuery()
     if (!projectID || !bucketName) {
-      messageApi.error('请先填写并查询 Project ID 与 BucketName。')
+      messageApi.error(tr('请先填写并查询 Project ID 与 BucketName。', 'Please set and query Project ID and BucketName first.'))
       return
     }
 
@@ -1253,11 +1261,11 @@ export function StoragePage() {
       .map((item) => String(item).trim())
       .filter((item) => item !== '')
     if (keys.length === 0) {
-      messageApi.warning('请先选择要删除的文件或目录。')
+      messageApi.warning(tr('请先选择要删除的文件或目录。', 'Please select files or directories to delete first.'))
       return
     }
 
-    const scopeLabel = '批量删除'
+    const scopeLabel = tr('批量删除', 'Batch Delete')
     const abortController = startDeleteRequest(scopeLabel)
     setSubmitting(true)
     try {
@@ -1303,18 +1311,18 @@ export function StoragePage() {
           return `${index + 1}. ${item.key}: ${reason}`
         })
         .join('；')
-      const scopeText = `（文件 ${selectedFiles}，目录 ${selectedDirectories}）`
+      const scopeText = tr(`（文件 ${selectedFiles}，目录 ${selectedDirectories}）`, ` (files ${selectedFiles}, directories ${selectedDirectories})`)
       const directorySummaryText =
         selectedDirectories > 0
-          ? `。目录递归删除统计：成功删除对象 ${directoryDeletedObjects}，失败 ${directoryFailedObjects}`
+          ? tr(`。目录递归删除统计：成功删除对象 ${directoryDeletedObjects}，失败 ${directoryFailedObjects}`, `. Directory recursive delete stats: deleted ${directoryDeletedObjects}, failed ${directoryFailedObjects}`)
           : ''
 
       if (failure > 0) {
         messageApi.warning(
-          `批量删除完成${scopeText}：成功 ${success}，失败 ${failure}${directorySummaryText}${failedText ? `。失败摘要：${failedText}` : ''}`,
+          tr(`批量删除完成${scopeText}：成功 ${success}，失败 ${failure}${directorySummaryText}${failedText ? `。失败摘要：${failedText}` : ''}`, `Batch delete completed${scopeText}: success ${success}, failure ${failure}${directorySummaryText}${failedText ? `. Failure summary: ${failedText}` : ''}`),
         )
       } else {
-        messageApi.success(`批量删除完成${scopeText}：成功 ${success}，失败 0${directorySummaryText}`)
+        messageApi.success(tr(`批量删除完成${scopeText}：成功 ${success}，失败 0${directorySummaryText}`, `Batch delete completed${scopeText}: success ${success}, failure 0${directorySummaryText}`))
       }
 
       setSelectedObjectKeys([])
@@ -1344,7 +1352,7 @@ export function StoragePage() {
     }
     const { projectID, bucketName } = getQuery()
     if (!projectID || !bucketName) {
-      messageApi.error('请先填写并查询 Project ID 与 BucketName。')
+      messageApi.error(tr('请先填写并查询 Project ID 与 BucketName。', 'Please set and query Project ID and BucketName first.'))
       return
     }
     const values = await renameForm.validateFields()
@@ -1354,7 +1362,7 @@ export function StoragePage() {
         : values.targetKey.trim()
     if (!targetKey) {
       messageApi.error(
-        renamingTargetType === 'directory' ? '目标目录前缀不能为空。' : '目标对象 Key 不能为空。',
+        renamingTargetType === 'directory' ? tr('目标目录前缀不能为空。', 'Target directory prefix cannot be empty.') : tr('目标对象 Key 不能为空。', 'Target object key cannot be empty.'),
       )
       return
     }
@@ -1385,13 +1393,13 @@ export function StoragePage() {
       if (targetType === 'directory') {
         if (failedObjects > 0 || normalizeString(summary?.result) === 'failure') {
           messageApi.warning(
-            `目录重命名完成：迁移 ${migratedObjects}，失败 ${failedObjects}${failedReasonText ? `。失败摘要：${failedReasonText}` : ''}`,
+            tr(`目录重命名完成：迁移 ${migratedObjects}，失败 ${failedObjects}${failedReasonText ? `。失败摘要：${failedReasonText}` : ''}`, `Directory rename completed: migrated ${migratedObjects}, failed ${failedObjects}${failedReasonText ? `. Failure summary: ${failedReasonText}` : ''}`),
           )
         } else {
-          messageApi.success(`目录重命名成功：迁移 ${migratedObjects} 个对象。`)
+          messageApi.success(tr(`目录重命名成功：迁移 ${migratedObjects} 个对象。`, `Directory rename succeeded: migrated ${migratedObjects} objects.`))
         }
       } else {
-        messageApi.success(payload?.message || '重命名成功。')
+        messageApi.success(payload?.message || tr('重命名成功。', 'Rename succeeded.'))
       }
 
       setRenameVisible(false)
@@ -1407,7 +1415,7 @@ export function StoragePage() {
         await queryObjects()
       }
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '重命名失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('重命名失败。', 'Rename failed.')))
     } finally {
       setSubmitting(false)
     }
@@ -1416,7 +1424,7 @@ export function StoragePage() {
   const openAudit = async (path: string) => {
     const { projectID } = getQuery()
     if (!projectID) {
-      messageApi.error('请先填写并查询 Project ID。')
+      messageApi.error(tr('请先填写并查询 Project ID。', 'Please set and query Project ID first.'))
       return
     }
     setAuditVisible(true)
@@ -1425,7 +1433,7 @@ export function StoragePage() {
       const logs = await listStorageAuditLogs(projectID, { path, limit: 20, offset: 0 })
       setAuditLogs(logs)
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '审计日志查询失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('审计日志查询失败。', 'Failed to query audit logs.')))
       setAuditLogs([])
     } finally {
       setAuditLoading(false)
@@ -1557,7 +1565,7 @@ export function StoragePage() {
         setSessionFailureSummaryMap(map)
       }
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '上传会话汇总加载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('上传会话汇总加载失败。', 'Failed to load upload session summaries.')))
       setSessionSummaries([])
       setSessionFailureSummaryMap({})
     } finally {
@@ -1568,7 +1576,7 @@ export function StoragePage() {
   const openSessionDetail = async (sessionSummary: UploadSessionSummary) => {
     const projectID = getQuery().projectID
     if (!Number.isFinite(projectID) || projectID <= 0) {
-      messageApi.error('请先填写并查询 Project ID。')
+      messageApi.error(tr('请先填写并查询 Project ID。', 'Please set and query Project ID first.'))
       return
     }
 
@@ -1596,7 +1604,7 @@ export function StoragePage() {
         }
       }
     } catch (error) {
-      messageApi.error(resolveAPIErrorMessage(error, '上传会话明细加载失败。'))
+      messageApi.error(resolveAPIErrorMessage(error, tr('上传会话明细加载失败。', 'Failed to load upload session details.')))
       setSessionDetailLogs([])
     } finally {
       setSessionDetailLoading(false)
@@ -1610,7 +1618,7 @@ export function StoragePage() {
 
   const columns: ColumnsType<ObjectItem> = [
     {
-      title: '名称',
+      title: tr('名称', 'Name'),
       dataIndex: 'key',
       render: (value: string, record) => {
         const displayName = objectDisplayName(value, currentPrefix, record.isDir)
@@ -1632,11 +1640,11 @@ export function StoragePage() {
         </Space>
       )},
     },
-    { title: '大小', dataIndex: 'size', width: 120 },
-    { title: '类型', dataIndex: 'contentType', width: 180 },
-    { title: '更新时间', dataIndex: 'lastModified', width: 220 },
+    { title: tr('大小', 'Size'), dataIndex: 'size', width: 120 },
+    { title: tr('类型', 'Type'), dataIndex: 'contentType', width: 180 },
+    { title: tr('更新时间', 'Updated At'), dataIndex: 'lastModified', width: 220 },
     {
-      title: '操作',
+      title: tr('操作', 'Actions'),
       width: 360,
       render: (_, record) => (
         <Space>
@@ -1646,7 +1654,7 @@ export function StoragePage() {
               onClick={() => void downloadObject(record.key)}
               size="small"
             >
-              下载
+              {tr('下载', 'Download')}
             </Button>
           ) : null}
           <Button
@@ -1655,10 +1663,10 @@ export function StoragePage() {
             onClick={() => openRename(record.key, record.isDir)}
             disabled={!canWrite}
           >
-            重命名
+            {tr('重命名', 'Rename')}
           </Button>
           <Popconfirm
-            title={record.isDir ? '确认删除该目录及其下全部对象？' : '确认删除该对象？'}
+            title={record.isDir ? tr('确认删除该目录及其下全部对象？', 'Delete this directory and all nested objects?') : tr('确认删除该对象？', 'Delete this object?')}
             onConfirm={() => void deleteObject(record.key, record.isDir)}
             okButtonProps={{ loading: submitting }}
             disabled={!canWrite}
@@ -1669,7 +1677,7 @@ export function StoragePage() {
               size="small"
               disabled={!canWrite}
             >
-              删除
+              {tr('删除', 'Delete')}
             </Button>
           </Popconfirm>
           <Button
@@ -1677,7 +1685,7 @@ export function StoragePage() {
             size="small"
             onClick={() => void openAudit(record.key)}
           >
-            审计
+            {tr('审计', 'Audit')}
           </Button>
         </Space>
       ),
@@ -1695,7 +1703,7 @@ export function StoragePage() {
 
   const sessionColumns: ColumnsType<UploadSessionSummary> = [
     {
-      title: '会话 ID',
+      title: tr('会话 ID', 'Session ID'),
       dataIndex: 'sessionId',
       width: 260,
       render: (value: string) => (
@@ -1711,7 +1719,7 @@ export function StoragePage() {
       ),
     },
     {
-      title: '整体进展',
+      title: tr('整体进展', 'Progress'),
       width: 210,
       render: (_, record) => (
         <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -1723,25 +1731,25 @@ export function StoragePage() {
       ),
     },
     {
-      title: '开始时间',
+      title: tr('开始时间', 'Started At'),
       dataIndex: 'startedAt',
       width: 190,
       render: (value: string) => formatDateTimeText(value),
     },
     {
-      title: '结束时间',
+      title: tr('结束时间', 'Finished At'),
       dataIndex: 'finishedAt',
       width: 190,
       render: (value: string) => formatDateTimeText(value),
     },
     {
-      title: '耗时',
+      title: tr('耗时', 'Duration'),
       dataIndex: 'durationMs',
       width: 140,
       render: (value: number) => formatDurationText(value),
     },
     {
-      title: '成功/失败',
+      title: tr('成功/失败', 'Success/Failure'),
       width: 120,
       render: (_, record) => (
         <Typography.Text>
@@ -1750,7 +1758,7 @@ export function StoragePage() {
       ),
     },
     {
-      title: '失败摘要',
+      title: tr('失败摘要', 'Failure Summary'),
       width: 340,
       render: (_, record) => {
         if (record.failedEntries <= 0) {
@@ -1760,16 +1768,16 @@ export function StoragePage() {
         const summary = sessionFailureSummaryMap[record.sessionId]
         return (
           <Typography.Text
-            ellipsis={{ tooltip: summary || '点击“查看明细”生成失败摘要。' }}
+            ellipsis={{ tooltip: summary || tr('点击“查看明细”生成失败摘要。', 'Click "View Details" to generate failure summary.') }}
             style={{ display: 'inline-block', maxWidth: 320, verticalAlign: 'bottom' }}
           >
-            {summary || '点击“查看明细”生成失败摘要。'}
+            {summary || tr('点击“查看明细”生成失败摘要。', 'Click "View Details" to generate failure summary.')}
           </Typography.Text>
         )
       },
     },
     {
-      title: '结果',
+      title: tr('结果', 'Result'),
       dataIndex: 'result',
       width: 110,
       render: (value: string) =>
@@ -1782,11 +1790,11 @@ export function StoragePage() {
         ),
     },
     {
-      title: '操作',
+      title: tr('操作', 'Actions'),
       width: 120,
       render: (_, record) => (
         <Button size="small" onClick={() => void openSessionDetail(record)}>
-          查看明细
+          {tr('查看明细', 'View Details')}
         </Button>
       ),
     },
@@ -1796,12 +1804,12 @@ export function StoragePage() {
     <>
       {messageContext}
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Card title="Storage Objects">
+        <Card title={tr('存储对象', 'Storage Objects')}>
           {!canWrite ? (
             <Alert
               type="warning"
               showIcon
-              message="当前账号为只读权限，上传/删除/重命名入口已禁用。"
+              message={t('pages.storage.readOnlyHint')}
               style={{ marginBottom: 12 }}
             />
           ) : null}
@@ -1814,11 +1822,11 @@ export function StoragePage() {
             <Form.Item
               name="projectId"
               label="Project ID"
-              rules={[{ required: true, message: '请输入 Project ID' }]}
+              rules={[{ required: true, message: tr('请输入 Project ID', 'Please input Project ID') }]}
             >
               <Select
                 showSearch
-                placeholder="请选择或搜索 Project ID"
+                placeholder={tr('请选择或搜索 Project ID', 'Select or search Project ID')}
                 style={{ width: 280 }}
                 loading={projectOptionsLoading}
                 filterOption={(input, option) =>
@@ -1855,18 +1863,18 @@ export function StoragePage() {
             <Form.Item
               name="bucketName"
               label="Bucket"
-              rules={[{ required: true, message: '请输入 BucketName' }]}
+              rules={[{ required: true, message: tr('请输入 BucketName', 'Please input BucketName') }]}
             >
               <Select
                 showSearch
-                placeholder="请选择 Bucket（选项目后自动加载）"
+                placeholder={tr('请选择 Bucket（选项目后自动加载）', 'Select Bucket (loaded after project selected)')}
                 style={{ width: 280 }}
                 loading={bucketOptionsLoading}
                 options={bucketOptions.map((bucketName) => ({
                   value: bucketName,
                   label: bucketName,
                 }))}
-                notFoundContent="该项目暂无存储桶绑定"
+                notFoundContent={tr('该项目暂无存储桶绑定', 'No bucket binding for this project')}
                 filterOption={(input, option) =>
                   String(option?.label ?? '')
                     .toLowerCase()
@@ -1885,7 +1893,7 @@ export function StoragePage() {
               />
             </Form.Item>
             <Form.Item name="prefix" label="Prefix">
-              <Input placeholder="可选目录前缀" style={{ width: 220 }} />
+              <Input placeholder={tr('可选目录前缀', 'Optional prefix')} style={{ width: 220 }} />
             </Form.Item>
             <Form.Item>
               <Button
@@ -1894,7 +1902,7 @@ export function StoragePage() {
                 onClick={() => void queryObjects()}
                 loading={loading}
               >
-                查询对象
+                {t('pages.storage.queryObjects')}
               </Button>
             </Form.Item>
           </Form>
@@ -1904,7 +1912,7 @@ export function StoragePage() {
         </Card>
 
         <Card
-          title="Upload"
+          title={tr('上传', 'Upload')}
           extra={
             <Space>
               <Upload
@@ -1912,7 +1920,7 @@ export function StoragePage() {
                 beforeUpload={(file) => {
                   if (file.size > uploadSizeLimitBytes) {
                     messageApi.error(
-                      `文件 ${file.name} 超过当前大小限制（${formatUploadLimitText(uploadSizeLimitBytes)}），已拒绝加入列表。`,
+                      tr(`文件 ${file.name} 超过当前大小限制（${formatUploadLimitText(uploadSizeLimitBytes)}），已拒绝加入列表。`, `File ${file.name} exceeds size limit (${formatUploadLimitText(uploadSizeLimitBytes)}), rejected.`),
                     )
                     return Upload.LIST_IGNORE
                   }
@@ -1942,7 +1950,7 @@ export function StoragePage() {
                 disabled={!canWrite || uploadStageAActive}
               >
                 <Button icon={<UploadOutlined />} disabled={!canWrite || uploadStageAActive}>
-                  选择文件
+                  {tr('选择文件', 'Select Files')}
                 </Button>
               </Upload>
               <Button
@@ -1951,11 +1959,11 @@ export function StoragePage() {
                 onClick={() => void uploadObject()}
                 disabled={!canWrite || uploadStageAActive}
               >
-                上传
+                {t('pages.storage.upload')}
               </Button>
               {uploadStageAActive ? (
                 <Button danger onClick={cancelUpload}>
-                  取消上传
+                  {t('pages.storage.cancelUpload')}
                 </Button>
               ) : null}
             </Space>
@@ -1973,10 +1981,10 @@ export function StoragePage() {
               </Space>
             ) : null}
             {uploadStageBActive || uploadStageBSummary ? (
-              <Card size="small" title="上传阶段 B（后端处理）">
+              <Card size="small" title={tr('上传阶段 B（后端处理）', 'Upload Stage B (Backend Processing)')}>
                 <Space direction="vertical" size={4} style={{ width: '100%' }}>
                   <Typography.Text type="secondary">
-                    会话 ID：{uploadStageBSessionID || uploadStageBSummary?.sessionId || '-'}
+                    {tr('会话 ID：', 'Session ID: ')}{uploadStageBSessionID || uploadStageBSummary?.sessionId || '-'}
                   </Typography.Text>
                   <Progress
                     percent={uploadStageBSummary?.progressPercent ?? 0}
@@ -1985,70 +1993,70 @@ export function StoragePage() {
                     data-testid="upload-stage-b-progress"
                   />
                   <Typography.Text>
-                    处理进度：{uploadStageBSummary?.processedEntries ?? 0}/
+                    {tr('处理进度：', 'Progress: ')}{uploadStageBSummary?.processedEntries ?? 0}/
                     {uploadStageBSummary?.totalEntries || uploadStageBSummary?.processedEntries || 0}
                   </Typography.Text>
                   <Typography.Text>
-                    开始：{formatDateTimeText(uploadStageBSummary?.startedAt || '')}，结束：
-                    {formatDateTimeText(uploadStageBSummary?.finishedAt || '')}，耗时：
+                    {tr('开始：', 'Start: ')}{formatDateTimeText(uploadStageBSummary?.startedAt || '')}{tr('，结束：', ', End: ')}
+                    {formatDateTimeText(uploadStageBSummary?.finishedAt || '')}{tr('，耗时：', ', Duration: ')}
                     {formatDurationText(uploadStageBSummary?.durationMs ?? 0)}
                   </Typography.Text>
                   <Typography.Text>
-                    成功：{uploadStageBSummary?.successEntries ?? 0}，失败：
+                    {tr('成功：', 'Success: ')}{uploadStageBSummary?.successEntries ?? 0}{tr('，失败：', ', Failure: ')}
                     {uploadStageBSummary?.failedEntries ?? 0}
                   </Typography.Text>
                   <Typography.Text type="secondary">
-                    失败摘要：{uploadStageBFailureSummary || '当前会话无失败摘要。'}
+                    {tr('失败摘要：', 'Failure summary: ')}{uploadStageBFailureSummary || tr('当前会话无失败摘要。', 'No failure summary in current session.')}
                   </Typography.Text>
                   {uploadStageBSummary ? (
                     <Button size="small" onClick={() => void openSessionDetail(uploadStageBSummary)}>
-                      查看会话明细
+                      {tr('查看会话明细', 'View Session Details')}
                     </Button>
                   ) : null}
                 </Space>
               </Card>
             ) : null}
             <Input
-              placeholder="可选：单文件时为对象 Key，多文件时作为 keyPrefix"
+              placeholder={tr('可选：单文件时为对象 Key，多文件时作为 keyPrefix', 'Optional: object Key for single file, keyPrefix for multiple files')}
               value={uploadKey}
               onChange={(event) => setUploadKey(event.target.value)}
               disabled={!canWrite}
             />
             <Typography.Text type="secondary">
-              当前大小限制：{formatUploadLimitText(uploadSizeLimitBytes)}
+              {tr('当前大小限制：', 'Current size limit: ')}{formatUploadLimitText(uploadSizeLimitBytes)}
             </Typography.Text>
             <Typography.Text type="secondary">
-              待上传文件：{pendingUploadFiles.length}
+              {tr('待上传文件：', 'Pending files: ')}{pendingUploadFiles.length}
               {pendingUploadFiles.length > 1 && uploadKey.trim()
-                ? '（将使用当前输入作为 keyPrefix）'
+                ? tr('（将使用当前输入作为 keyPrefix）', ' (current input will be used as keyPrefix)')
                 : ''}
             </Typography.Text>
             <Typography.Text type="secondary">
-              支持 zip/tar/tar.gz/tgz 自动解压上传。
+              {tr('支持 zip/tar/tar.gz/tgz 自动解压上传。', 'Supports auto-extract upload for zip/tar/tar.gz/tgz.')}
             </Typography.Text>
           </Space>
         </Card>
 
         <Card
-          title="Object List"
+          title={tr('对象列表', 'Object List')}
           extra={
             <Space>
               {deleting ? (
                 <>
                   <Typography.Text type="secondary">
-                    {deletingScopeLabel || '删除'}进行中...
+                    {(deletingScopeLabel || tr('删除', 'Delete'))}{tr('进行中...', ' in progress...')}
                   </Typography.Text>
                   <Button danger onClick={cancelDelete} size="small">
-                    取消删除
+                    {tr('取消删除', 'Cancel Delete')}
                   </Button>
                 </>
               ) : null}
-              <Typography.Text type="secondary">当前目录：{currentPrefix || '/'}</Typography.Text>
+              <Typography.Text type="secondary">{t('pages.storage.currentDir', { dir: currentPrefix || '/' })}</Typography.Text>
               <Button onClick={() => void goToParentDirectory()} disabled={!currentPrefix || loading}>
-                返回上一级
+                {tr('返回上一级', 'Back to Parent')}
               </Button>
               <Popconfirm
-                title={`确认删除已选 ${selectedObjectKeys.length} 个条目？目录将递归删除其下全部对象。`}
+                title={tr(`确认删除已选 ${selectedObjectKeys.length} 个条目？目录将递归删除其下全部对象。`, `Delete ${selectedObjectKeys.length} selected entries? Directories will be deleted recursively.`)}
                 onConfirm={() => void deleteSelectedObjects()}
                 okButtonProps={{ loading: submitting }}
                 disabled={!canWrite || selectedObjectKeys.length === 0}
@@ -2058,7 +2066,7 @@ export function StoragePage() {
                   icon={<DeleteOutlined />}
                   disabled={!canWrite || selectedObjectKeys.length === 0}
                 >
-                  批量删除
+                  {tr('批量删除', 'Batch Delete')}
                 </Button>
               </Popconfirm>
             </Space>
@@ -2089,20 +2097,20 @@ export function StoragePage() {
         </Card>
 
         <Card
-          title="Archive Upload Sessions"
+          title={tr('压缩包上传会话', 'Archive Upload Sessions')}
           extra={
             <Button
               icon={<ReloadOutlined />}
               loading={sessionSummariesLoading}
               onClick={() => void loadUploadSessionSummaries()}
             >
-              刷新会话
+              {t('pages.storage.refreshSessions')}
             </Button>
           }
         >
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
             <Typography.Text type="secondary">
-              仅展示压缩包上传会话汇总（action = object.upload_archive），可查看对应 object.upload 明细。
+              {tr('仅展示压缩包上传会话汇总（action = object.upload_archive），可查看对应 object.upload 明细。', 'Only archive upload session summaries are shown (action = object.upload_archive).')}
             </Typography.Text>
             <div style={{ width: '100%', maxWidth: '100%', overflowX: 'auto' }}>
               <Table<UploadSessionSummary>
@@ -2111,7 +2119,7 @@ export function StoragePage() {
                 columns={sessionColumns}
                 dataSource={sessionSummaries}
                 pagination={{ pageSize: 5 }}
-                locale={{ emptyText: '暂无压缩包上传会话记录。' }}
+                locale={{ emptyText: tr('暂无压缩包上传会话记录。', 'No archive upload sessions.') }}
                 tableLayout="fixed"
                 scroll={{ x: 1600 }}
                 style={{ width: '100%', minWidth: 0 }}
@@ -2122,34 +2130,34 @@ export function StoragePage() {
       </Space>
 
       <Modal
-        title={renamingTargetType === 'directory' ? '重命名目录' : '重命名对象'}
+        title={renamingTargetType === 'directory' ? tr('重命名目录', 'Rename Directory') : tr('重命名对象', 'Rename Object')}
         open={renameVisible}
         onCancel={() => setRenameVisible(false)}
         onOk={() => void submitRename()}
         okButtonProps={{ loading: submitting, disabled: !canWrite }}
         destroyOnHidden
       >
-        <Typography.Paragraph type="secondary">源对象：{renamingSourceKey}</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">{tr('源对象：', 'Source: ')}{renamingSourceKey}</Typography.Paragraph>
         {renamingTargetType === 'directory' ? (
           <Typography.Paragraph type="secondary">
-            目录重命名会迁移该目录前缀下全部对象到目标目录前缀。
+            {tr('目录重命名会迁移该目录前缀下全部对象到目标目录前缀。', 'Directory rename migrates all objects under source prefix to target prefix.')}
           </Typography.Paragraph>
         ) : null}
         <Form<RenameFormValues> form={renameForm} layout="vertical">
           <Form.Item
             name="targetKey"
-            label={renamingTargetType === 'directory' ? '目标目录前缀' : '目标对象 Key'}
+            label={renamingTargetType === 'directory' ? tr('目标目录前缀', 'Target Directory Prefix') : tr('目标对象 Key', 'Target Object Key')}
             rules={[
               {
                 required: true,
-                message: renamingTargetType === 'directory' ? '请输入目标目录前缀' : '请输入目标对象 Key',
+                message: renamingTargetType === 'directory' ? tr('请输入目标目录前缀', 'Please input target directory prefix') : tr('请输入目标对象 Key', 'Please input target object key'),
               },
               {
                 min: 1,
                 message:
                   renamingTargetType === 'directory'
-                    ? '目标目录前缀不能为空'
-                    : '目标对象 Key 不能为空',
+                    ? tr('目标目录前缀不能为空', 'Target directory prefix cannot be empty')
+                    : tr('目标对象 Key 不能为空', 'Target object key cannot be empty'),
               },
             ]}
           >
@@ -2159,7 +2167,7 @@ export function StoragePage() {
       </Modal>
 
       <Drawer
-        title="对象审计日志"
+        title={tr('对象审计日志', 'Object Audit Logs')}
         open={auditVisible}
         onClose={() => setAuditVisible(false)}
         width={760}
@@ -2170,10 +2178,10 @@ export function StoragePage() {
           pagination={{ pageSize: 8 }}
           dataSource={auditLogs}
           columns={[
-            { title: '时间', dataIndex: 'createdAt', width: 210 },
-            { title: '动作', dataIndex: 'action', width: 160 },
+            { title: tr('时间', 'Time'), dataIndex: 'createdAt', width: 210 },
+            { title: tr('动作', 'Action'), dataIndex: 'action', width: 160 },
             {
-              title: '结果',
+              title: tr('结果', 'Result'),
               dataIndex: 'result',
               width: 120,
               render: (value: string) =>
@@ -2185,14 +2193,14 @@ export function StoragePage() {
                   <Tag>{value}</Tag>
                 ),
             },
-            { title: '对象', dataIndex: 'targetIdentifier' },
-            { title: '操作者', dataIndex: 'actorUsername', width: 140 },
+            { title: tr('对象', 'Object'), dataIndex: 'targetIdentifier' },
+            { title: tr('操作者', 'Actor'), dataIndex: 'actorUsername', width: 140 },
           ]}
         />
       </Drawer>
 
       <Drawer
-        title={activeSession ? `上传会话明细：${activeSession.sessionId}` : '上传会话明细'}
+        title={activeSession ? `${tr('上传会话明细：', 'Upload Session Detail: ')}${activeSession.sessionId}` : tr('上传会话明细', 'Upload Session Detail')}
         open={sessionDetailVisible}
         onClose={() => setSessionDetailVisible(false)}
         width={980}
@@ -2202,21 +2210,21 @@ export function StoragePage() {
             <Card size="small">
               <Space direction="vertical" size={4}>
                 <Typography.Text>
-                  会话进展：{activeSession.processedEntries}/
+                  {tr('会话进展：', 'Session progress: ')}{activeSession.processedEntries}/
                   {activeSession.totalEntries || activeSession.processedEntries} (
                   {activeSession.progressPercent}%)
                 </Typography.Text>
                 <Typography.Text>
-                  开始：{formatDateTimeText(activeSession.startedAt)}，结束：
-                  {formatDateTimeText(activeSession.finishedAt)}，耗时：
+                  {tr('开始：', 'Start: ')}{formatDateTimeText(activeSession.startedAt)}{tr('，结束：', ', End: ')}
+                  {formatDateTimeText(activeSession.finishedAt)}{tr('，耗时：', ', Duration: ')}
                   {formatDurationText(activeSession.durationMs)}
                 </Typography.Text>
                 <Typography.Text>
-                  成功：{activeSession.successEntries}，失败：{activeSession.failedEntries}
+                  {tr('成功：', 'Success: ')}{activeSession.successEntries}{tr('，失败：', ', Failure: ')}{activeSession.failedEntries}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  失败摘要：
-                  {sessionFailureSummaryMap[activeSession.sessionId] || '当前会话无失败摘要。'}
+                  {tr('失败摘要：', 'Failure summary: ')}
+                  {sessionFailureSummaryMap[activeSession.sessionId] || tr('当前会话无失败摘要。', 'No failure summary in current session.')}
                 </Typography.Text>
               </Space>
             </Card>
@@ -2241,10 +2249,10 @@ export function StoragePage() {
             }}
             dataSource={pagedSessionDetailLogs}
             columns={[
-              { title: '时间', dataIndex: 'createdAt', width: 210 },
-              { title: '动作', dataIndex: 'action', width: 140 },
+              { title: tr('时间', 'Time'), dataIndex: 'createdAt', width: 210 },
+              { title: tr('动作', 'Action'), dataIndex: 'action', width: 140 },
               {
-                title: '结果',
+                title: tr('结果', 'Result'),
                 dataIndex: 'result',
                 width: 120,
                 render: (value: string) =>
@@ -2256,16 +2264,16 @@ export function StoragePage() {
                     <Tag>{value}</Tag>
                   ),
               },
-              { title: '对象', dataIndex: 'targetIdentifier' },
+              { title: tr('对象', 'Object'), dataIndex: 'targetIdentifier' },
               {
-                title: '失败原因',
+                title: tr('失败原因', 'Failure Reason'),
                 width: 260,
                 render: (_, record) =>
                   normalizeString(record.result) === 'failure'
                     ? parseFailureReasonFromAuditLog(record)?.reason ?? '-'
                     : '-',
               },
-              { title: '操作者', dataIndex: 'actorUsername', width: 120 },
+              { title: tr('操作者', 'Actor'), dataIndex: 'actorUsername', width: 120 },
             ]}
           />
         </Space>
