@@ -4,9 +4,9 @@ import shellZhCN from './shell'
 import systemZhCN from './system'
 
 const zhCN = {
+  ...shellZhCN,
   ...authOverviewZhCN,
   ...featurePagesZhCN,
-  ...shellZhCN,
   ...systemZhCN,
 }
 

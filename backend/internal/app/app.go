@@ -10,6 +10,7 @@ import (
 
 	audithandler "github.com/baihua19941101/cdnManage/internal/handler/audits"
 	authhandler "github.com/baihua19941101/cdnManage/internal/handler/auth"
+	overviewhandler "github.com/baihua19941101/cdnManage/internal/handler/overview"
 	projecthandler "github.com/baihua19941101/cdnManage/internal/handler/projects"
 	storagehandler "github.com/baihua19941101/cdnManage/internal/handler/storage"
 	userhandler "github.com/baihua19941101/cdnManage/internal/handler/users"
@@ -103,6 +104,7 @@ func New() (*Application, error) {
 	projectHandler := projecthandler.NewHandler(projectService, store.AuditLogs(), store.UserProjectRoles())
 	storageHandler := storagehandler.NewHandler(projectService, store.AuditLogs(), cfg.Upload.MaxFileSizeMB, cfg.Upload.ArchiveParallelism, cfg.Upload.FileParallelism)
 	auditHandler := audithandler.NewHandler(store.AuditLogs(), store.Projects(), store.UserProjectRoles())
+	overviewHandler := overviewhandler.NewHandler(store.Projects(), store.ProjectBuckets(), store.ProjectCDNs(), store.AuditLogs(), store.UserProjectRoles())
 	accessDeniedAuditor := middleware.NewAccessDeniedAuditor(auditRecorder)
 	middleware.SetDefaultAccessDeniedAuditor(accessDeniedAuditor)
 	projectScopeResolver := middleware.NewProjectScopeResolver(
@@ -112,7 +114,7 @@ func New() (*Application, error) {
 	).WithAuditor(accessDeniedAuditor)
 
 	return &Application{
-		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, storageHandler, auditHandler, authService, projectScopeResolver),
+		server: transport.NewServer(cfg, authHandler, userHandler, projectHandler, storageHandler, auditHandler, overviewHandler, authService, projectScopeResolver),
 	}, nil
 }
 
