@@ -396,6 +396,196 @@ h6,
     radial-gradient(circle at 85% 0%, color-mix(in srgb, var(--nt-accent) 14%, transparent), transparent 44%) !important;
 }
 
+.overview-metrics-grid {
+  margin-top: 2px;
+}
+
+.overview-kpi-tile {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 116px;
+  padding: 14px 14px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 90%, transparent);
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--nt-panel-bg-elevated) 96%, transparent), color-mix(in srgb, var(--nt-panel-bg) 90%, transparent)),
+    radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--nt-accent) 10%, transparent), transparent 48%);
+  box-shadow: 0 12px 30px rgba(3, 10, 18, 0.34);
+}
+
+.overview-kpi-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 88%, transparent);
+}
+
+.overview-kpi-content .ant-typography {
+  display: block;
+}
+
+.overview-kpi-content .ant-typography + .ant-typography {
+  margin-top: 2px;
+}
+
+.overview-kpi-footnote {
+  font-size: 12px;
+  opacity: 0.86;
+}
+
+.overview-kpi-cyan .overview-kpi-icon {
+  color: #66f0ff;
+  background: rgba(42, 188, 222, 0.16);
+}
+
+.overview-kpi-blue .overview-kpi-icon {
+  color: #83b5ff;
+  background: rgba(73, 133, 255, 0.16);
+}
+
+.overview-kpi-green .overview-kpi-icon {
+  color: #58e3aa;
+  background: rgba(56, 201, 143, 0.16);
+}
+
+.overview-kpi-purple .overview-kpi-icon {
+  color: #c08dff;
+  background: rgba(153, 94, 255, 0.16);
+}
+
+.overview-kpi-orange .overview-kpi-icon {
+  color: #ffb562;
+  background: rgba(255, 153, 74, 0.16);
+}
+
+.overview-kpi-indigo .overview-kpi-icon {
+  color: #7e91ff;
+  background: rgba(101, 109, 255, 0.16);
+}
+
+.overview-kpi-red .overview-kpi-icon {
+  color: #ff8b8b;
+  background: rgba(255, 98, 98, 0.16);
+}
+
+.overview-kpi-teal .overview-kpi-icon {
+  color: #77ffe1;
+  background: rgba(59, 201, 172, 0.16);
+}
+
+.overview-control-bar {
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 88%, transparent) !important;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--nt-panel-bg-elevated) 94%, transparent), color-mix(in srgb, var(--nt-panel-bg) 92%, transparent)),
+    radial-gradient(circle at 16% 6%, color-mix(in srgb, var(--nt-accent) 9%, transparent), transparent 50%) !important;
+}
+
+.overview-chart-grid .overview-chart-card {
+  min-height: 340px;
+}
+
+.overview-donut-wrap {
+  display: grid;
+  place-items: center;
+}
+
+.overview-donut {
+  width: 170px;
+  height: 170px;
+  border-radius: 50%;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 80%, transparent);
+  box-shadow: 0 10px 24px rgba(4, 13, 24, 0.35);
+}
+
+.overview-donut-center {
+  position: absolute;
+  inset: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--nt-panel-bg-elevated) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nt-panel-border) 72%, transparent);
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.overview-ratio-table {
+  display: grid;
+  gap: 6px;
+}
+
+.overview-ratio-head,
+.overview-ratio-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 0.7fr 0.7fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.overview-ratio-head {
+  font-size: 12px;
+  color: var(--nt-text-secondary);
+  opacity: 0.86;
+}
+
+.overview-ratio-row {
+  font-size: 13px;
+  color: var(--nt-text-primary);
+  border-top: 1px solid color-mix(in srgb, var(--nt-panel-border) 60%, transparent);
+  padding-top: 6px;
+}
+
+.overview-ratio-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.overview-ratio-name i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.overview-trend-wrap {
+  position: relative;
+}
+
+.overview-trend-tooltip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--nt-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--nt-panel-bg-elevated) 96%, transparent);
+  box-shadow: 0 8px 18px rgba(5, 12, 22, 0.35);
+  pointer-events: none;
+}
+
+.overview-trend-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 1024px) {
+  .overview-kpi-tile {
+    min-height: 104px;
+  }
+
+  .overview-chart-grid .overview-chart-card {
+    min-height: 300px;
+  }
+}
+
 .ant-card,
 .ant-btn,
 .ant-segmented,

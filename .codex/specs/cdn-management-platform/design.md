@@ -435,6 +435,71 @@ CDN 操作台页面交互策略（与存储页对齐）：
 - 第二阶段按需要新增聚合接口（如 `/api/v1/overview`）减少前端并发请求数与重复计算。
 - 首页自动刷新采用 `30~60` 秒窗口；用户进行手工筛选时暂停自动刷新以避免打断操作。
 
+#### 7.1 Overview 指标与图表扩展
+
+职责：
+
+- 在现有 Overview 工作台基础上新增资源规模 KPI 卡片。
+- 新增上传与 CDN 操作趋势折线图。
+- 新增云厂商资源占比与操作类型占比扇形图。
+- 确保所有聚合结果遵循“当前用户可见项目范围”约束。
+
+接口策略（首版）：
+
+- 新增 `GET /api/v1/overview/metrics`
+  - 入参：`timeWindow=24h|7d|30d`
+  - 返回：KPI、折线图序列、扇形图分类占比、空状态标记。
+- 保留现有 `accessible/context/audits` 接口以支持页面其他区域，后续可按性能需要合并。
+
+返回数据建议结构：
+
+```json
+{
+  "kpis": {
+    "projectCount": 12,
+    "bucketCount": 18,
+    "cdnCount": 15,
+    "uploadSessionTotal": 138,
+    "cdnOperationTotal": 96,
+    "failureTotal": 7,
+    "uploadAvgDurationMs": 2430
+  },
+  "trends": {
+    "uploadSessions": [
+      { "time": "2026-04-06", "success": 18, "failed": 2 }
+    ],
+    "cdnOperations": [
+      { "time": "2026-04-06", "success": 13, "failed": 1 }
+    ]
+  },
+  "ratios": {
+    "providerResourceShare": [
+      { "name": "aliyun", "value": 14 },
+      { "name": "tencent", "value": 19 }
+    ],
+    "operationTypeShare": [
+      { "name": "object.upload", "value": 66 },
+      { "name": "cdn.refresh_url", "value": 21 }
+    ]
+  },
+  "emptyState": {
+    "hasTrendData": true,
+    "hasRatioData": true
+  }
+}
+```
+
+图表设计策略：
+
+- 折线图
+  - 两组双序列：上传（成功/失败）、CDN 操作（成功/失败）。
+  - X 轴按时间窗口自动切粒度：`24h` 按小时，`7d/30d` 按天。
+- 扇形图
+  - 云厂商资源占比：按可见项目范围内 `project_buckets + project_cdns` 的 `provider_type` 聚合。
+  - 操作类型占比：按审计 `action` 聚合，分类过多时合并低频项为 `other`。
+- 空状态
+  - 无数据不报错，显示空状态文案与零值卡片。
+
 #### 8. Neo-Tech Theme Foundation
 
 职责：
@@ -764,6 +829,8 @@ erDiagram
 - 用户项目绑定快照接口必须限制为平台管理员访问，且在目标用户不存在时返回可追踪的 `user_not_found` 错误。
 - 可见项目列表与项目上下文接口在权限拒绝时必须返回可追踪错误码，并在 `details` 中包含 `projectID` 或权限判定关键信息。
 - Overview 首页的统计与风险摘要在返回数据时必须遵循用户可见项目范围，且在跳转参数中保持筛选条件一致性。
+- Overview 指标聚合接口必须在 `timeWindow` 参数非法时返回字段级校验错误并提供允许值列表。
+- Overview 图表聚合结果在无数据时必须返回空数组与空状态标记，而不是返回结构缺失或 `null`。
 
 ## Testing Strategy
 
@@ -816,6 +883,8 @@ erDiagram
 - CDN 页面目录查询交互与 `project_read_only`/`project_admin` 的写入口状态分离行为
 - 用户绑定弹框的快照预填、紧凑表格编辑与保存后回填行为
 - Overview 首页的业务核心卡片、项目工作台列表、运维风险摘要与最近活动时间线联动行为
+- Overview 指标与图表在 `24h/7d/30d` 时间窗口切换下的数据一致性
+- Overview 扇形图在低频分类合并 `other` 时的占比正确性
 - 语言切换后导航、按钮、提示与关键页面标题的即时更新行为
 - Neo-Tech 主题在 Light/Auth/Dark 下的关键组件对比度与可读性行为
 - 三套主题切换是否正确应用
@@ -866,3 +935,4 @@ erDiagram
 - Requirement 23: 由 Overview Workspace Component 的业务核心卡片、快捷入口、项目工作台列表、风险摘要与只读角色可见性规则覆盖
 - Requirement 24: 由 Neo-Tech Theme Foundation 的主题令牌分层、三主题一致性策略与动效降级策略覆盖
 - Requirement 25: 由 Internationalization Architecture 的默认语言、`en-US` 切换、持久化与缺失键回退策略覆盖
+- Requirement 26: 由 Overview Workspace Component 的指标与图表扩展、`/api/v1/overview/metrics` 聚合接口与前端图表渲染策略覆盖
