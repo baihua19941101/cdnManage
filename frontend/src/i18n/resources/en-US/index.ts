@@ -4,9 +4,9 @@ import shellEnUS from './shell'
 import systemEnUS from './system'
 
 const enUS = {
+  ...shellEnUS,
   ...authOverviewEnUS,
   ...featurePagesEnUS,
-  ...shellEnUS,
   ...systemEnUS,
 }
 

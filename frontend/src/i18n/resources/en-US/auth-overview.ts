@@ -83,6 +83,14 @@ const authOverviewEnUS = {
       cdnTrend: 'CDN Operation Trend',
       providerRatio: 'Provider Resource Share',
       operationRatio: 'Operation Type Share',
+      topN: 'TopN',
+      total: 'Total',
+      sortBy: 'Sort',
+      columns: {
+        name: 'Name',
+        value: 'Count',
+        percent: 'Share',
+      },
       empty: 'No chart data in current time window.',
     },
     status: {

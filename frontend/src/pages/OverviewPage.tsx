@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons'
 import { Alert, Button, Card, Col, Row, Segmented, Space, Spin, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { resolveAPIErrorMessage } from '../services/api/error'
@@ -83,6 +83,8 @@ type OverviewRatioPoint = {
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
+type RatioTableSortKey = 'name' | 'value' | 'percent'
+type RatioTableSortOrder = 'ascend' | 'descend'
 
 type OverviewMetricsPayload = {
   timeWindow: TimeRange
@@ -115,20 +117,25 @@ type ProjectWorkbenchRow = {
 
 type RiskItem = {
   key: string
-  title: string
-  summary: string
+  projectID: number
+  projectName: string
+  rawAction: string
+  targetIdentifier?: string
+  requestId?: string
+  kind: 'upload' | 'cdn'
   occurredAt: string
   auditLink: string
 }
 
 type RecentActivityItem = {
   key: string
-  actor: string
-  project: string
-  action: string
-  result: string
+  actorUsername?: string
+  actorUserId?: number
+  projectName: string
+  projectID: number
+  rawAction: string
   rawResult: string
-  time: string
+  createdAt?: string
   requestId: string
   traceLink: string
 }
@@ -255,11 +262,82 @@ const buildPieGradient = (data: OverviewRatioPoint[]) => {
 const RatioPie = ({
   data,
   emptyText,
+  topN,
+  topNLabel,
+  totalLabel,
+  sortByLabel,
+  sortLabelName,
+  sortLabelValue,
+  sortLabelPercent,
 }: {
   data: OverviewRatioPoint[]
   emptyText: string
+  topN: number
+  topNLabel: string
+  totalLabel: string
+  sortByLabel: string
+  sortLabelName: string
+  sortLabelValue: string
+  sortLabelPercent: string
 }) => {
+  const [sortKey, setSortKey] = useState<RatioTableSortKey>('value')
+  const [sortOrder, setSortOrder] = useState<RatioTableSortOrder>('descend')
   const total = data.reduce((sum, item) => sum + item.value, 0)
+
+  const rows = useMemo(() => {
+    const normalized = data.map((item, index) => ({
+      key: `${item.name}-${index}`,
+      name: item.name,
+      value: item.value,
+      percent: total > 0 ? (item.value / total) * 100 : 0,
+      color: chartColors[index % chartColors.length],
+    }))
+
+    const sorted = [...normalized].sort((left, right) => {
+      let diff = 0
+      if (sortKey === 'name') {
+        diff = left.name.localeCompare(right.name)
+      } else if (sortKey === 'percent') {
+        diff = left.percent - right.percent
+      } else {
+        diff = left.value - right.value
+      }
+      return sortOrder === 'ascend' ? diff : -diff
+    })
+    return sorted.slice(0, topN)
+  }, [data, sortKey, sortOrder, topN, total])
+
+  const columns = useMemo<ColumnsType<(typeof rows)[number]>>(
+    () => [
+      {
+        title: sortLabelName,
+        dataIndex: 'name',
+        key: 'name',
+        width: 190,
+        render: (value: string, record) => (
+          <span className="overview-ratio-name">
+            <i style={{ background: record.color }} />
+            {value}
+          </span>
+        ),
+      },
+      {
+        title: sortLabelValue,
+        dataIndex: 'value',
+        key: 'value',
+        width: 90,
+      },
+      {
+        title: sortLabelPercent,
+        dataIndex: 'percent',
+        key: 'percent',
+        width: 90,
+        render: (value: number) => `${value.toFixed(1)}%`,
+      },
+    ],
+    [sortLabelName, sortLabelPercent, sortLabelValue],
+  )
+
   if (total <= 0 || data.length === 0) {
     return <Typography.Text type="secondary">{emptyText}</Typography.Text>
   }
@@ -275,7 +353,7 @@ const RatioPie = ({
             }}
           >
             <div className="overview-donut-center">
-              <Typography.Text type="secondary">Total</Typography.Text>
+              <Typography.Text type="secondary">{totalLabel}</Typography.Text>
               <Typography.Title level={4} style={{ margin: 0 }}>
                 {total}
               </Typography.Title>
@@ -284,30 +362,39 @@ const RatioPie = ({
         </div>
       </Col>
       <Col xs={24} sm={14} md={16}>
-        <div className="overview-ratio-table">
-          <div className="overview-ratio-head">
-            <span>Name</span>
-            <span>Count</span>
-            <span>Share</span>
-          </div>
-          {data.map((item, index) => {
-            const percent = ((item.value / total) * 100).toFixed(1)
-            return (
-              <div key={`${item.name}-${index}`} className="overview-ratio-row">
-                <span className="overview-ratio-name">
-                  <i
-                    style={{
-                      background: chartColors[index % chartColors.length],
-                    }}
-                  />
-                  {item.name}
-                </span>
-                <span>{item.value}</span>
-                <span>{percent}%</span>
-              </div>
-            )
-          })}
-        </div>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space wrap size={8} style={{ justifyContent: 'space-between', width: '100%' }}>
+            <Space size={6}>
+              <Typography.Text type="secondary">{topNLabel}</Typography.Text>
+              <Tag color="cyan">Top {topN}</Tag>
+            </Space>
+            <Space size={6}>
+              <Typography.Text type="secondary">{sortByLabel}</Typography.Text>
+              <Segmented
+                size="small"
+                value={`${sortKey}:${sortOrder}`}
+                options={[
+                  { label: sortLabelValue, value: 'value:descend' },
+                  { label: sortLabelPercent, value: 'percent:descend' },
+                  { label: sortLabelName, value: 'name:ascend' },
+                ]}
+                onChange={(value) => {
+                  const [nextKey, nextOrder] = String(value).split(':') as [RatioTableSortKey, RatioTableSortOrder]
+                  setSortKey(nextKey)
+                  setSortOrder(nextOrder)
+                }}
+              />
+            </Space>
+          </Space>
+          <Table
+            size="small"
+            pagination={false}
+            columns={columns}
+            dataSource={rows}
+            rowKey="key"
+            className="overview-ratio-ant-table"
+          />
+        </Space>
       </Col>
     </Row>
   )
@@ -325,6 +412,7 @@ const TrendLine = ({
   failedLabel: string
 }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  const [crosshair, setCrosshair] = useState<{ x: number; y: number } | null>(null)
   if (data.length === 0) {
     return <Typography.Text type="secondary">{emptyText}</Typography.Text>
   }
@@ -343,9 +431,32 @@ const TrendLine = ({
       .map((value, index) => `${padding + stepX * index},${y(value)}`)
       .join(' ')
 
+  const handleMove = (event: MouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const rawX = ((event.clientX - rect.left) / rect.width) * width
+    const rawY = ((event.clientY - rect.top) / rect.height) * height
+    const clampedX = Math.max(padding, Math.min(width - padding, rawX))
+    const clampedY = Math.max(padding, Math.min(height - padding, rawY))
+    const index = stepX <= 0 ? 0 : Math.round((clampedX - padding) / stepX)
+    const safeIndex = Math.max(0, Math.min(data.length - 1, index))
+    const pointX = padding + stepX * safeIndex
+    const successY = y(data[safeIndex].success)
+    const failedY = y(data[safeIndex].failed)
+    const pointY = Math.abs(clampedY - successY) <= Math.abs(clampedY - failedY) ? successY : failedY
+    setHoverIndex(safeIndex)
+    setCrosshair({ x: pointX, y: pointY })
+  }
+
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-      <div className="overview-trend-wrap">
+      <div
+        className="overview-trend-wrap"
+        onMouseMove={handleMove}
+        onMouseLeave={() => {
+          setHoverIndex(null)
+          setCrosshair(null)
+        }}
+      >
         <svg width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
           {Array.from({ length: 5 }).map((_, index) => {
             const value = (maxValue / 4) * (4 - index)
@@ -369,30 +480,26 @@ const TrendLine = ({
           })}
           <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#314056" strokeWidth="1" />
           <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#314056" strokeWidth="1" />
-          {data.map((_, index) => {
-            const x = padding + stepX * index
-            return (
-              <rect
-                key={`hover-${index}`}
-                x={x - 10}
-                y={padding}
-                width={20}
-                height={height - padding * 2}
-                fill="transparent"
-                onMouseEnter={() => setHoverIndex(index)}
-                onMouseLeave={() => setHoverIndex((previous) => (previous === index ? null : previous))}
-              />
-            )
-          })}
-          {hoverIndex !== null ? (
+          {crosshair ? (
             <line
-              x1={padding + stepX * hoverIndex}
+              x1={crosshair.x}
               y1={padding}
-              x2={padding + stepX * hoverIndex}
+              x2={crosshair.x}
               y2={height - padding}
               stroke="#4f8cff"
               strokeDasharray="4 4"
               strokeOpacity={0.65}
+            />
+          ) : null}
+          {crosshair ? (
+            <line
+              x1={padding}
+              y1={crosshair.y}
+              x2={width - padding}
+              y2={crosshair.y}
+              stroke="#4f8cff"
+              strokeDasharray="4 4"
+              strokeOpacity={0.45}
             />
           ) : null}
         <polyline
@@ -422,7 +529,7 @@ const TrendLine = ({
           })}
         </svg>
         {hoverIndex !== null ? (
-          <div className="overview-trend-tooltip">
+          <div className="overview-trend-tooltip" style={crosshair ? { left: `${Math.min(70, Math.max(2, (crosshair.x / width) * 100))}%` } : undefined}>
             <div className="overview-trend-tooltip-title">{data[hoverIndex]?.time || '-'}</div>
             <div>{successLabel}: {data[hoverIndex]?.success ?? 0}</div>
             <div>{failedLabel}: {data[hoverIndex]?.failed ?? 0}</div>
@@ -502,7 +609,7 @@ const formatActionLabel = (action: string, t: Translate) => {
 }
 
 export function OverviewPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [range, setRange] = useState<TimeRange>('24h')
   const platformRole = useAuthStore((state) => state.user?.platformRole)
   const isPlatformAdmin = isPlatformAdminRole(platformRole)
@@ -511,6 +618,7 @@ export function OverviewPage() {
   const [cdnTrend, setCDNTrend] = useState<OverviewTrendPoint[]>([])
   const [providerRatio, setProviderRatio] = useState<OverviewRatioPoint[]>([])
   const [operationRatio, setOperationRatio] = useState<OverviewRatioPoint[]>([])
+  const [ratioTopN, setRatioTopN] = useState<5 | 8 | 12>(8)
   const [workbenchRows, setWorkbenchRows] = useState<ProjectWorkbenchRow[]>([])
   const [failedUploadRiskItems, setFailedUploadRiskItems] = useState<RiskItem[]>([])
   const [failedCDNRiskItems, setFailedCDNRiskItems] = useState<RiskItem[]>([])
@@ -630,21 +738,12 @@ export function OverviewPage() {
       setCDNTrend(Array.isArray(overviewData?.trends?.cdnOperations) ? overviewData.trends.cdnOperations : [])
       setProviderRatio(
         Array.isArray(overviewData?.ratios?.providerResourceShare)
-          ? overviewData.ratios.providerResourceShare.map((item) => ({
-            ...item,
-            name: formatProviderLabel(item.name, t),
-          }))
+          ? overviewData.ratios.providerResourceShare
           : [],
       )
       setOperationRatio(
         Array.isArray(overviewData?.ratios?.operationTypeShare)
-          ? overviewData.ratios.operationTypeShare.map((item) => ({
-            ...item,
-            name:
-              item.name === 'other'
-                ? t('overview.actions.other')
-                : formatActionLabel(item.name, t),
-          }))
+          ? overviewData.ratios.operationTypeShare
           : [],
       )
 
@@ -656,7 +755,7 @@ export function OverviewPage() {
         .filter((project) => Number.isFinite(project.id) && project.id > 0)
         .map((project) => ({
           id: project.id,
-          name: project.name?.trim() || t('overview.activity.projectFallback', { projectId: project.id }),
+          name: project.name?.trim() || '',
         }))
 
       const projectNameByID = new Map(
@@ -712,7 +811,7 @@ export function OverviewPage() {
             .map((log) => ({
               projectID,
               projectName:
-                projectNameByID.get(projectID) ??
+                projectNameByID.get(projectID) ||
                 t('overview.activity.projectFallback', { projectId: projectID }),
               log,
             })),
@@ -724,12 +823,12 @@ export function OverviewPage() {
         .slice(0, 5)
         .map((item, index) => ({
           key: `upload-${item.projectID}-${item.log.id || index}`,
-          title: `${item.projectName} (#${item.projectID})`,
-          summary: item.log.targetIdentifier?.trim()
-            ? item.log.targetIdentifier.trim()
-            : item.log.requestId?.trim()
-              ? `${t('overview.cards.requestId')}: ${item.log.requestId.trim()}`
-              : t('overview.risks.uploadSessionFailed'),
+          projectID: item.projectID,
+          projectName: item.projectName,
+          rawAction: item.log.action,
+          kind: 'upload' as const,
+          targetIdentifier: item.log.targetIdentifier?.trim() || '',
+          requestId: item.log.requestId?.trim() || '',
           occurredAt: formatAuditTime(item.log.createdAt),
           auditLink: buildAuditLinkWithQuery(
             item.projectID,
@@ -746,7 +845,7 @@ export function OverviewPage() {
             .map((log) => ({
               projectID,
               projectName:
-                projectNameByID.get(projectID) ??
+                projectNameByID.get(projectID) ||
                 t('overview.activity.projectFallback', { projectId: projectID }),
               log,
             })),
@@ -758,12 +857,12 @@ export function OverviewPage() {
         .slice(0, 5)
         .map((item, index) => ({
           key: `cdn-${item.projectID}-${item.log.id || index}`,
-          title: `${item.projectName} (#${item.projectID})`,
-          summary: item.log.targetIdentifier?.trim()
-            ? item.log.targetIdentifier.trim()
-            : item.log.requestId?.trim()
-              ? `${t('overview.cards.requestId')}: ${item.log.requestId.trim()}`
-              : formatActionLabel(item.log.action, t),
+          projectID: item.projectID,
+          projectName: item.projectName,
+          rawAction: item.log.action,
+          kind: 'cdn' as const,
+          targetIdentifier: item.log.targetIdentifier?.trim() || '',
+          requestId: item.log.requestId?.trim() || '',
           occurredAt: formatAuditTime(item.log.createdAt),
           auditLink: buildAuditLinkWithQuery(
             item.projectID,
@@ -779,16 +878,15 @@ export function OverviewPage() {
         .flatMap((projectID) =>
           (projectAuditLogMap.get(projectID) ?? []).map((log, index) => ({
             key: `activity-${projectID}-${log.id || index}`,
-            actor: log.actorUsername?.trim()
-              ? log.actorUsername.trim()
-              : Number.isFinite(log.actorUserId)
-                ? `user#${log.actorUserId}`
-                : t('overview.activity.unknownUser'),
-            project: `${projectNameByID.get(projectID) ?? t('overview.activity.projectFallback', { projectId: projectID })} (#${projectID})`,
-            action: formatActionLabel(log.action?.trim() || '-', t),
-            result: formatResultLabel(log.result?.trim() || '-', t),
+            actorUsername: log.actorUsername?.trim() || '',
+            actorUserId: Number.isFinite(log.actorUserId) ? log.actorUserId : undefined,
+            projectName:
+              projectNameByID.get(projectID) ||
+              t('overview.activity.projectFallback', { projectId: projectID }),
+            projectID,
+            rawAction: log.action?.trim() || '-',
             rawResult: log.result?.trim() || '-',
-            time: formatAuditTime(log.createdAt),
+            createdAt: log.createdAt,
             requestId: log.requestId?.trim() || '-',
             traceLink: buildTraceLink(
               projectID,
@@ -798,7 +896,6 @@ export function OverviewPage() {
               log.targetIdentifier,
               log.requestId,
             ),
-            createdAt: log.createdAt,
           })),
         )
         .sort(
@@ -806,14 +903,15 @@ export function OverviewPage() {
             Date.parse(right.createdAt ?? '') - Date.parse(left.createdAt ?? ''),
         )
         .slice(0, RECENT_ACTIVITY_LIMIT)
-        .map(({ key, actor, project, action, result, rawResult, time, requestId, traceLink }) => ({
+        .map(({ key, actorUsername, actorUserId, projectName, projectID, rawAction, rawResult, createdAt, requestId, traceLink }) => ({
           key,
-          actor,
-          project,
-          action,
-          result,
+          actorUsername,
+          actorUserId,
+          projectName,
+          projectID,
+          rawAction,
           rawResult,
-          time,
+          createdAt,
           requestId,
           traceLink,
         }))
@@ -890,7 +988,7 @@ export function OverviewPage() {
         setLoading(false)
       }
     }
-  }, [buildAuditLinkWithQuery, buildTraceLink, isPlatformAdmin, listAuditLogs, range])
+  }, [buildAuditLinkWithQuery, buildTraceLink, i18n.language, isPlatformAdmin, listAuditLogs, range, t])
 
   useEffect(() => {
     void loadCoreMetrics()
@@ -909,6 +1007,24 @@ export function OverviewPage() {
   const trendGranularityLabel = useMemo(
     () => (range === '24h' ? t('overview.controls.byHour') : t('overview.controls.byDay')),
     [range, t],
+  )
+
+  const providerRatioDisplay = useMemo(
+    () =>
+      providerRatio.map((item) => ({
+        ...item,
+        name: formatProviderLabel(item.name, t),
+      })),
+    [providerRatio, t],
+  )
+
+  const operationRatioDisplay = useMemo(
+    () =>
+      operationRatio.map((item) => ({
+        ...item,
+        name: item.name === 'other' ? t('overview.actions.other') : formatActionLabel(item.name, t),
+      })),
+    [operationRatio, t],
   )
 
   const coreMetricCards = useMemo(
@@ -1053,38 +1169,43 @@ export function OverviewPage() {
     () => [
       {
         title: t('overview.cards.actor'),
-        dataIndex: 'actor',
         width: 180,
+        render: (_value, record) =>
+          record.actorUsername?.trim()
+            ? record.actorUsername.trim()
+            : Number.isFinite(record.actorUserId)
+              ? `user#${record.actorUserId}`
+              : t('overview.activity.unknownUser'),
       },
       {
         title: t('overview.cards.project'),
-        dataIndex: 'project',
         width: 260,
+        render: (_value, record) =>
+          `${record.projectName || t('overview.activity.projectFallback', { projectId: record.projectID })} (#${record.projectID})`,
       },
       {
         title: t('overview.cards.action'),
-        dataIndex: 'action',
         width: 220,
+        render: (_value, record) => formatActionLabel(record.rawAction, t),
       },
       {
         title: t('overview.cards.result'),
-        dataIndex: 'result',
         width: 120,
         render: (_value: string, record) =>
           record.rawResult === 'success' ? (
-            <Tag color="green">{record.result}</Tag>
+            <Tag color="green">{formatResultLabel(record.rawResult, t)}</Tag>
           ) : record.rawResult === 'failure' ? (
-            <Tag color="red">{record.result}</Tag>
+            <Tag color="red">{formatResultLabel(record.rawResult, t)}</Tag>
           ) : record.rawResult === 'denied' ? (
-            <Tag color="orange">{record.result}</Tag>
+            <Tag color="orange">{formatResultLabel(record.rawResult, t)}</Tag>
           ) : (
-            <Tag>{record.result}</Tag>
+            <Tag>{formatResultLabel(record.rawResult, t)}</Tag>
           ),
       },
       {
         title: t('overview.cards.time'),
-        dataIndex: 'time',
         width: 190,
+        render: (_value, record) => formatAuditTime(record.createdAt),
       },
       {
         title: t('overview.cards.requestId'),
@@ -1205,6 +1326,17 @@ export function OverviewPage() {
             <Space>
               <Typography.Text type="secondary">{t('overview.controls.granularity')}</Typography.Text>
               <Tag color="processing">{trendGranularityLabel}</Tag>
+              <Typography.Text type="secondary">{t('overview.charts.topN')}</Typography.Text>
+              <Segmented<5 | 8 | 12>
+                size="small"
+                value={ratioTopN}
+                options={[
+                  { label: 'Top 5', value: 5 },
+                  { label: 'Top 8', value: 8 },
+                  { label: 'Top 12', value: 12 },
+                ]}
+                onChange={(value) => setRatioTopN(value)}
+              />
             </Space>
           </Col>
         </Row>
@@ -1236,12 +1368,32 @@ export function OverviewPage() {
       <Row gutter={[16, 16]} className="overview-chart-grid">
         <Col xs={24} lg={12}>
           <Card title={t('overview.charts.providerRatio')} className="overview-chart-card">
-            <RatioPie data={providerRatio} emptyText={t('overview.charts.empty')} />
+            <RatioPie
+              data={providerRatioDisplay}
+              emptyText={t('overview.charts.empty')}
+              topN={ratioTopN}
+              topNLabel={t('overview.charts.topN')}
+              totalLabel={t('overview.charts.total')}
+              sortByLabel={t('overview.charts.sortBy')}
+              sortLabelName={t('overview.charts.columns.name')}
+              sortLabelValue={t('overview.charts.columns.value')}
+              sortLabelPercent={t('overview.charts.columns.percent')}
+            />
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card title={t('overview.charts.operationRatio')} className="overview-chart-card">
-            <RatioPie data={operationRatio} emptyText={t('overview.charts.empty')} />
+            <RatioPie
+              data={operationRatioDisplay}
+              emptyText={t('overview.charts.empty')}
+              topN={ratioTopN}
+              topNLabel={t('overview.charts.topN')}
+              totalLabel={t('overview.charts.total')}
+              sortByLabel={t('overview.charts.sortBy')}
+              sortLabelName={t('overview.charts.columns.name')}
+              sortLabelValue={t('overview.charts.columns.value')}
+              sortLabelPercent={t('overview.charts.columns.percent')}
+            />
           </Card>
         </Col>
       </Row>
@@ -1287,9 +1439,19 @@ export function OverviewPage() {
                 failedUploadRiskItems.map((item) => (
                   <Card key={item.key} size="small">
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Typography.Text strong>{item.title}</Typography.Text>
+                      <Typography.Text strong>
+                        {item.projectName} (#{item.projectID})
+                      </Typography.Text>
                       <Typography.Text type="secondary">{item.occurredAt}</Typography.Text>
-                      <Typography.Text>{item.summary}</Typography.Text>
+                      <Typography.Text>
+                        {item.targetIdentifier
+                          ? item.targetIdentifier
+                          : item.requestId
+                            ? `${t('overview.cards.requestId')}: ${item.requestId}`
+                            : item.kind === 'upload'
+                              ? t('overview.risks.uploadSessionFailed')
+                              : formatActionLabel(item.rawAction, t)}
+                      </Typography.Text>
                       <Button type="link" style={{ padding: 0, width: 'fit-content' }}>
                         <Link to={item.auditLink}>{t('overview.risks.viewAudit')}</Link>
                       </Button>
@@ -1308,9 +1470,19 @@ export function OverviewPage() {
                 failedCDNRiskItems.map((item) => (
                   <Card key={item.key} size="small">
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Typography.Text strong>{item.title}</Typography.Text>
+                      <Typography.Text strong>
+                        {item.projectName} (#{item.projectID})
+                      </Typography.Text>
                       <Typography.Text type="secondary">{item.occurredAt}</Typography.Text>
-                      <Typography.Text>{item.summary}</Typography.Text>
+                      <Typography.Text>
+                        {item.targetIdentifier
+                          ? item.targetIdentifier
+                          : item.requestId
+                            ? `${t('overview.cards.requestId')}: ${item.requestId}`
+                            : item.kind === 'upload'
+                              ? t('overview.risks.uploadSessionFailed')
+                              : formatActionLabel(item.rawAction, t)}
+                      </Typography.Text>
                       <Button type="link" style={{ padding: 0, width: 'fit-content' }}>
                         <Link to={item.auditLink}>{t('overview.risks.viewAudit')}</Link>
                       </Button>

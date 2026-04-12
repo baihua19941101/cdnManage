@@ -83,6 +83,14 @@ const authOverviewZhCN = {
       cdnTrend: 'CDN 操作趋势',
       providerRatio: '云厂商资源占比',
       operationRatio: '操作类型占比',
+      topN: 'TopN',
+      total: '总量',
+      sortBy: '排序',
+      columns: {
+        name: '名称',
+        value: '数量',
+        percent: '占比',
+      },
       empty: '当前时间窗口暂无图表数据。',
     },
     status: {
