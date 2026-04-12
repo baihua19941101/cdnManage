@@ -106,29 +106,29 @@ const FAILURE_RESULT = 'failure'
 
 const quickActionItems = [
   {
-    title: 'Upload Files',
-    description: 'Open Storage workspace and publish objects.',
+    title: '上传文件',
+    description: '进入存储页面并发布资源对象。',
     to: '/storage',
     icon: <UploadOutlined />,
     requiresWriteAccess: true,
   },
   {
-    title: 'Refresh URL Cache',
-    description: 'Jump to CDN page for URL refresh.',
+    title: 'URL 刷新',
+    description: '进入 CDN 页面提交 URL 刷新。',
     to: '/cdn',
     icon: <CloudServerOutlined />,
     requiresWriteAccess: true,
   },
   {
-    title: 'Sync Assets',
-    description: 'Trigger resource sync from CDN workspace.',
+    title: '资源同步',
+    description: '进入 CDN 页面触发资源同步。',
     to: '/cdn',
     icon: <SyncOutlined />,
     requiresWriteAccess: true,
   },
   {
-    title: 'Audit Queries',
-    description: 'Inspect recent actions and failures.',
+    title: '审计查询',
+    description: '查看最近操作与失败记录。',
     to: '/audits',
     icon: <AuditOutlined />,
     requiresWriteAccess: false,
@@ -332,7 +332,7 @@ export function OverviewPage() {
         .filter((project) => Number.isFinite(project.id) && project.id > 0)
         .map((project) => ({
           id: project.id,
-          name: project.name?.trim() || `Project-${project.id}`,
+          name: project.name?.trim() || `项目-${project.id}`,
         }))
 
       const visibleProjectTotal = normalizedProjectOptions.length
@@ -398,7 +398,7 @@ export function OverviewPage() {
             .filter((log) => log.action === UPLOAD_SESSION_ACTION && log.result === FAILURE_RESULT)
             .map((log) => ({
               projectID,
-              projectName: projectNameByID.get(projectID) ?? `Project-${projectID}`,
+              projectName: projectNameByID.get(projectID) ?? `项目-${projectID}`,
               log,
             })),
         )
@@ -430,7 +430,7 @@ export function OverviewPage() {
             .filter((log) => CDN_ACTIONS.has(log.action) && log.result === FAILURE_RESULT)
             .map((log) => ({
               projectID,
-              projectName: projectNameByID.get(projectID) ?? `Project-${projectID}`,
+              projectName: projectNameByID.get(projectID) ?? `项目-${projectID}`,
               log,
             })),
         )
@@ -466,8 +466,8 @@ export function OverviewPage() {
               ? log.actorUsername.trim()
               : Number.isFinite(log.actorUserId)
                 ? `user#${log.actorUserId}`
-                : 'unknown',
-            project: `${projectNameByID.get(projectID) ?? `Project-${projectID}`} (#${projectID})`,
+                : '未知用户',
+            project: `${projectNameByID.get(projectID) ?? `项目-${projectID}`} (#${projectID})`,
             action: log.action?.trim() || '-',
             result: log.result?.trim() || '-',
             time: formatAuditTime(log.createdAt),
@@ -561,7 +561,7 @@ export function OverviewPage() {
       setFailedUploadRiskItems([])
       setFailedCDNRiskItems([])
       setRecentActivityItems([])
-      setErrorText(resolveAPIErrorMessage(error, 'Overview 核心卡片数据加载失败。'))
+      setErrorText(resolveAPIErrorMessage(error, '总览核心卡片数据加载失败。'))
       if (!isPlatformAdmin) {
         setHasWritableProjectAccess(false)
       }
@@ -630,22 +630,22 @@ export function OverviewPage() {
   const workbenchColumns = useMemo<ColumnsType<ProjectWorkbenchRow>>(
     () => [
       {
-        title: 'Project ID',
+        title: '项目 ID',
         dataIndex: 'projectId',
         width: 120,
       },
       {
-        title: 'Project Name',
+        title: '项目名称',
         dataIndex: 'projectName',
         width: 220,
       },
       {
-        title: 'Primary Bucket',
+        title: '主存储桶',
         dataIndex: 'primaryBucket',
         width: 220,
       },
       {
-        title: 'Primary CDN',
+        title: '主 CDN',
         dataIndex: 'primaryCDN',
         width: 260,
       },
@@ -671,7 +671,7 @@ export function OverviewPage() {
         render: (_, record) => (
           <Space size={4}>
             <Button type="link" size="small" style={{ padding: 0 }}>
-              <Link to={`/storage?projectId=${record.projectId}`}>Storage</Link>
+              <Link to={`/storage?projectId=${record.projectId}`}>存储</Link>
             </Button>
             <Button type="link" size="small" style={{ padding: 0 }}>
               <Link to={`/cdn?projectId=${record.projectId}`}>CDN</Link>
@@ -686,22 +686,22 @@ export function OverviewPage() {
   const activityColumns = useMemo<ColumnsType<RecentActivityItem>>(
     () => [
       {
-        title: 'actor',
+        title: '操作人',
         dataIndex: 'actor',
         width: 180,
       },
       {
-        title: 'project',
+        title: '项目',
         dataIndex: 'project',
         width: 260,
       },
       {
-        title: 'action',
+        title: '动作',
         dataIndex: 'action',
         width: 220,
       },
       {
-        title: 'result',
+        title: '结果',
         dataIndex: 'result',
         width: 120,
         render: (value: string) =>
@@ -716,12 +716,12 @@ export function OverviewPage() {
           ),
       },
       {
-        title: 'time',
+        title: '时间',
         dataIndex: 'time',
         width: 190,
       },
       {
-        title: 'requestId',
+        title: '请求 ID',
         dataIndex: 'requestId',
         width: 280,
         render: (value: string, record) =>
@@ -751,19 +751,14 @@ export function OverviewPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card
-        style={{
-          border: '1px solid rgba(92, 175, 196, 0.2)',
-          background: 'linear-gradient(135deg, rgba(26,60,73,0.85), rgba(8,20,30,0.96))',
-        }}
-      >
+      <Card className="nt-hero-card">
         <Space
           direction="vertical"
           size={12}
           style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}
         >
           <div>
-            <Typography.Text style={{ color: '#7db0c4', letterSpacing: 1.2 }}>
+            <Typography.Text style={{ color: 'var(--nt-text-secondary)', letterSpacing: 1.6 }}>
               OVERVIEW
             </Typography.Text>
             <Typography.Title
@@ -771,13 +766,12 @@ export function OverviewPage() {
               style={{
                 marginTop: 8,
                 marginBottom: 8,
-                color: '#f4fbfd',
-                fontFamily: '"Iowan Old Style", "Palatino Linotype", serif',
+                color: 'var(--nt-text-primary)',
               }}
             >
-              Welcome to CDN Manage workspace
+              欢迎使用 CDN 管理平台
             </Typography.Title>
-            <Typography.Paragraph style={{ marginBottom: 0, color: '#d4e8ef' }}>
+            <Typography.Paragraph style={{ marginBottom: 0, color: 'var(--nt-text-secondary)' }}>
               {headerSubtitle}
             </Typography.Paragraph>
           </div>
@@ -792,17 +786,17 @@ export function OverviewPage() {
               onChange={(value) => setRange(value)}
             />
             <Button icon={<ReloadOutlined />} onClick={() => void loadCoreMetrics()} loading={loading}>
-              Refresh
+              刷新
             </Button>
           </Space>
         </Space>
       </Card>
 
       <Card
-        title="Core Metrics"
+        title="核心指标"
         extra={
           <Typography.Text type="secondary">
-            {lastUpdatedAt ? `Updated: ${new Date(lastUpdatedAt).toLocaleString()}` : 'Waiting for data'}
+            {lastUpdatedAt ? `更新时间：${new Date(lastUpdatedAt).toLocaleString()}` : '等待数据中'}
           </Typography.Text>
         }
       >
@@ -827,7 +821,7 @@ export function OverviewPage() {
         </Space>
       </Card>
 
-      <Card title="Quick Actions">
+      <Card title="快捷操作">
         <Row gutter={[16, 16]}>
           {visibleQuickActionItems.map((item) => (
             <Col key={item.title} xs={24} md={12} lg={6}>
@@ -838,7 +832,7 @@ export function OverviewPage() {
                   </Typography.Text>
                   <Typography.Text type="secondary">{item.description}</Typography.Text>
                   <Button type="link" style={{ padding: 0 }}>
-                    <Link to={item.to}>Open</Link>
+                    <Link to={item.to}>打开</Link>
                   </Button>
                 </Space>
               </Card>

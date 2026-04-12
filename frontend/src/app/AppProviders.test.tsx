@@ -59,14 +59,14 @@ describe('AppProviders theme dataset', () => {
     })
   })
 
-  it('auth 路由优先级高于 shell 主题（/login 与 /setup 均强制 auth）', async () => {
+  it('登录与初始化路由优先级高于 shell 主题（/login 与 /setup 均强制 dark）', async () => {
     act(() => {
       useShellStore.getState().setThemeMode('light')
     })
     const firstRender = renderWithRouterAt('/login')
 
     await waitFor(() => {
-      expect(document.documentElement.dataset.theme).toBe('auth')
+      expect(document.documentElement.dataset.theme).toBe('dark')
     })
 
     act(() => {
@@ -74,7 +74,7 @@ describe('AppProviders theme dataset', () => {
     })
 
     await waitFor(() => {
-      expect(document.documentElement.dataset.theme).toBe('auth')
+      expect(document.documentElement.dataset.theme).toBe('dark')
     })
 
     firstRender.unmount()
@@ -85,7 +85,7 @@ describe('AppProviders theme dataset', () => {
     renderWithRouterAt('/setup')
 
     await waitFor(() => {
-      expect(document.documentElement.dataset.theme).toBe('auth')
+      expect(document.documentElement.dataset.theme).toBe('dark')
     })
   })
 })

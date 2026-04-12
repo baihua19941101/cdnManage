@@ -326,3 +326,27 @@
 3. WHEN 已授权用户查看 Overview 首页，THE CDN 管理平台 SHALL 展示当前用户可见项目范围内的项目工作台列表并提供进入 Storage 与 CDN 页面的快捷入口。
 4. WHEN 已授权用户查看 Overview 首页的运维风险摘要，THE CDN 管理平台 SHALL 展示最近失败上传会话与最近失败 CDN 操作并支持跳转到对应筛选结果页面。
 5. WHILE 用户角色为 `project_read_only`，THE CDN 管理平台 SHALL 在 Overview 首页隐藏写操作快捷入口并保留查询与导航入口。
+
+### Requirement 24
+
+**User Story:** 作为平台用户，我希望 Light、Auth 与 Dark 主题都具备统一科技风视觉语言，这样我可以在不同场景下获得一致且可读的炫酷体验。
+
+#### Acceptance Criteria
+
+1. WHEN 用户访问任意页面，THE CDN 管理平台 SHALL 使用统一的 Neo-Tech 设计令牌体系定义颜色、边框、阴影、间距与动效规则。
+2. WHEN 用户切换 Light、Auth 或 Dark 主题，THE CDN 管理平台 SHALL 保持一致的信息层级与可读性对比度。
+3. WHILE 用户位于认证相关页面，THE CDN 管理平台 SHALL 使用独立的 Auth 科技风样式且不改变功能交互行为。
+4. IF 用户设备或环境不适合完整动效渲染，THEN THE CDN 管理平台 SHALL 降级非关键动画并保持主要交互可用。
+5. WHEN 平台展示表格与表单密集页面，THE CDN 管理平台 SHALL 保持文本与状态颜色可读并避免低对比样式。
+
+### Requirement 25
+
+**User Story:** 作为平台用户，我希望系统默认中文并支持切换到英文 `en-US`，这样我可以按语言偏好使用平台。
+
+#### Acceptance Criteria
+
+1. WHEN 用户首次访问 CDN 管理平台，THE CDN 管理平台 SHALL 默认使用 `zh-CN` 语言。
+2. WHEN 用户切换语言到 `en-US`，THE CDN 管理平台 SHALL 即时更新导航、标题、按钮与提示文案。
+3. WHEN 用户刷新页面或重新登录，THE CDN 管理平台 SHALL 保持最近一次语言选择。
+4. WHILE 用户在任意页面操作，THE CDN 管理平台 SHALL 使用统一国际化键值映射渲染文案而不是硬编码文本。
+5. IF 某个语言键在当前语言包中缺失，THEN THE CDN 管理平台 SHALL 回退到 `zh-CN` 文案并记录可追踪告警信息。

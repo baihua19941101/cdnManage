@@ -128,33 +128,22 @@ export function LoginPage() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 24,
-        background:
-          'radial-gradient(circle at top, rgba(226, 175, 111, 0.28), transparent 30%), linear-gradient(180deg, #f7efe1 0%, #efe1c8 52%, #e6d4b4 100%)',
-      }}
-    >
-      <Card style={{ width: 'min(440px, 100%)', borderRadius: 24 }}>
+    <div className="auth-scene">
+      <Card className="auth-card auth-card--login">
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Typography.Text style={{ color: '#9c5b1f', letterSpacing: 2 }}>
-            AUTH ENTRY
-          </Typography.Text>
-          <Typography.Title
-            level={2}
-            style={{
-              margin: 0,
-              fontFamily: '"Iowan Old Style", "Palatino Linotype", serif',
-              color: '#2d2118',
-            }}
-          >
-            Sign in to the control deck
-          </Typography.Title>
+          <Typography.Text className="auth-label">身份验证入口</Typography.Text>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Typography.Title level={2} className="auth-title">
+              登录 CDN 管理平台
+            </Typography.Title>
+            <Typography.Text className="auth-subtitle">
+              使用平台账号登录，进入资源发布与审计控制台。
+            </Typography.Text>
+          </Space>
 
-          {errorMessage ? <Alert type="error" showIcon message={errorMessage} /> : null}
+          {errorMessage ? (
+            <Alert className="auth-alert" type="error" showIcon message={errorMessage} />
+          ) : null}
 
           <Form<LoginFormValues>
             form={form}
@@ -169,26 +158,26 @@ export function LoginPage() {
           >
             <Form.Item
               name="email"
-              label="Email"
+              label="邮箱"
               rules={[
                 { required: true, message: '请输入邮箱地址。' },
                 { type: 'email', message: '请输入有效的邮箱地址。' },
               ]}
             >
-              <Input autoComplete="email" placeholder="admin@example.com" />
+              <Input autoComplete="email" placeholder="admin@example.com" size="large" />
             </Form.Item>
             <Form.Item
               name="password"
-              label="Password"
+              label="密码"
               rules={[
                 { required: true, message: '请输入密码。' },
                 { min: 6, message: '密码长度至少为 6 位。' },
               ]}
             >
-              <Input.Password autoComplete="current-password" placeholder="••••••••" />
+              <Input.Password autoComplete="current-password" placeholder="••••••••" size="large" />
             </Form.Item>
-            <Button type="primary" htmlType="submit" loading={submitting} block>
-              Continue
+            <Button className="auth-submit" type="primary" htmlType="submit" loading={submitting} block size="large">
+              登录
             </Button>
           </Form>
         </Space>
